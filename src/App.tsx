@@ -57,10 +57,12 @@ import {
   Toast,
 } from "./components/ui";
 import { assessments, assignments, classPerformance, currentStudent, lessons, monthlyActivity, recentActivity, students, trendData } from "./data/mockData";
+import { ReadingActivitiesPage, ReadingActivityPage, SharedReadingProgress, StudentProgressSummary } from "./components/ReadingActivity";
 import type { NavItem } from "./types";
 
 const studentNav: NavItem[] = [
   { label: "Dashboard", path: "/student/dashboard", icon: Home },
+  { label: "My Reading Activities", path: "/student/activities", icon: BookOpen },
   { label: "My Lessons", path: "/student/lessons", icon: BookOpen },
   { label: "Reading Activity", path: "/student/reading/brave-explorer", icon: Mic },
   { label: "Basic Result", path: "/student/assessment/a-104", icon: Star },
@@ -72,6 +74,10 @@ const teacherNav: NavItem[] = [
   { label: "Class Overview", path: "/teacher/dashboard", icon: BarChart3 },
 ];
 
+const parentNav: NavItem[] = [
+  { label: "Dashboard", path: "/parent/dashboard", icon: Home },
+];
+
 export default function App() {
   return (
     <Routes>
@@ -79,14 +85,21 @@ export default function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
       <Route path="/student/dashboard" element={<Shell nav={studentNav} user={{ name: "Anaya Rao", role: "Student" }} subtitle="Grade 4 - Level 3"><StudentDashboard /></Shell>} />
+      <Route path="/student/activities" element={<Shell nav={studentNav} user={{ name: "Anaya Rao", role: "Student" }} subtitle="Grade 4 - Level 3"><ReadingActivitiesPage /></Shell>} />
+      <Route path="/student/activity/:activityId" element={<Shell nav={studentNav} user={{ name: "Anaya Rao", role: "Student" }} subtitle="Grade 4 - Level 3"><ReadingActivityPage /></Shell>} />
       <Route path="/student/lessons" element={<Shell nav={studentNav} user={{ name: "Anaya Rao", role: "Student" }} subtitle="Grade 4 - Level 3"><LessonsPage /></Shell>} />
       <Route path="/student/reading/:lessonId" element={<Shell nav={studentNav} user={{ name: "Anaya Rao", role: "Student" }} subtitle="Grade 4 - Level 3"><ReadingPage /></Shell>} />
       <Route path="/student/assessment/:assessmentId" element={<Shell nav={studentNav} user={{ name: "Anaya Rao", role: "Student" }} subtitle="Grade 4 - Level 3"><AssessmentPage /></Shell>} />
-      <Route path="/teacher/dashboard" element={<Shell nav={teacherNav} user={{ name: "Ms. Sarah", role: "Teacher" }} subtitle="Grade 4 Reading"><TeacherDashboard /></Shell>} />
-      <Route path="/teacher/students/:studentId" element={<Shell nav={teacherNav} user={{ name: "Ms. Sarah", role: "Teacher" }} subtitle="Grade 4 Reading"><StudentPerformance /></Shell>} />
+      <Route path="/teacher/dashboard" element={<RoleGuard role="teacher"><Shell nav={teacherNav} user={{ name: "Ms. Sarah", role: "Teacher" }} subtitle="Grade 4 Reading"><TeacherDashboard /></Shell></RoleGuard>} />
+      <Route path="/teacher/students/:studentId" element={<RoleGuard role="teacher"><Shell nav={teacherNav} user={{ name: "Ms. Sarah", role: "Teacher" }} subtitle="Grade 4 Reading"><StudentPerformance /></Shell></RoleGuard>} />
+      <Route path="/parent/dashboard" element={<RoleGuard role="parent"><Shell nav={parentNav} user={{ name: "Priya Rao", role: "Parent" }} subtitle="Anaya's family"><ParentDashboard /></Shell></RoleGuard>} />
       <Route path="*" element={<Navigate to="/student/dashboard" replace />} />
     </Routes>
   );
+}
+
+function RoleGuard({ role, children }: { role: "teacher" | "parent"; children: React.ReactNode }) {
+  return sessionStorage.getItem("readwise-demo-role") === role ? <>{children}</> : <Navigate to="/login" replace />;
 }
 
 function Shell({ nav, user, subtitle, children }: { nav: NavItem[]; user: { name: string; role: string }; subtitle: string; children: React.ReactNode }) {
@@ -134,13 +147,25 @@ function Login() {
   const [show, setShow] = useState(false);
   const [values, setValues] = useState({ email: "", password: "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const demoAccounts = [
+    { role: "Student", email: "student@readwise.demo", password: "Readwise123!", path: "/student/dashboard" },
+    { role: "Teacher", email: "teacher@readwise.demo", password: "Readwise123!", path: "/teacher/dashboard" },
+    { role: "Parent", email: "parent@readwise.demo", password: "Readwise123!", path: "/parent/dashboard" },
+  ];
   function submit(event: FormEvent) {
     event.preventDefault();
     const next: Record<string, string> = {};
     if (!values.email.includes("@")) next.email = "Enter a valid email address.";
-    if (values.password.length < 6) next.password = "Password must be at least 6 characters.";
+    if (!values.password) next.password = "Enter your password.";
+    const account = demoAccounts.find((item) => item.email === values.email.trim().toLowerCase() && item.password === values.password);
+    if (!Object.keys(next).length && !account) next.credentials = "Email or password is incorrect. Use one of the demo accounts below.";
     setErrors(next);
-    if (!Object.keys(next).length) navigate("/student/dashboard");
+    if (!Object.keys(next).length && account) {
+      sessionStorage.setItem("readwise-demo-role", account.role.toLowerCase());
+      navigate(account.path);
+    } else {
+      sessionStorage.removeItem("readwise-demo-role");
+    }
   }
   return (
     <div className="grid min-h-screen bg-white lg:grid-cols-[1.05fr_.95fr]">
@@ -160,12 +185,17 @@ function Login() {
               <button type="button" className="font-semibold text-primary">Forgot password?</button>
             </div>
           </div>
+          {errors.credentials ? <p className="text-sm font-medium text-danger" role="alert">{errors.credentials}</p> : null}
           <Button className="w-full" type="submit">Sign In</Button>
           <div className="grid gap-3 sm:grid-cols-2">
             <Button type="button" variant="outline">Google</Button>
             <Button type="button" variant="outline">Microsoft</Button>
           </div>
           <p className="text-center text-sm text-muted">New to READWISE? <a className="font-bold text-primary" href="/signup">Create a demo account</a></p>
+          <Card className="space-y-3 bg-[#F8F9FD] p-4">
+            <div className="text-sm font-bold text-text">Demo sign-in accounts</div>
+            {demoAccounts.map((account) => <div key={account.role} className="text-xs leading-5 text-muted"><span className="font-bold text-text">{account.role}:</span> {account.email}<br />Password: {account.password}</div>)}
+          </Card>
         </form>
       </main>
     </div>
@@ -187,7 +217,7 @@ function Signup() {
     if (values.password !== values.confirm) next.confirm = "Passwords must match.";
     if (!accepted) next.terms = "Accept the terms to continue.";
     setErrors(next);
-    if (!Object.keys(next).length) navigate(role === "Teacher" ? "/teacher/dashboard" : "/student/dashboard");
+    if (!Object.keys(next).length) navigate(role === "Teacher" ? "/teacher/dashboard" : role === "Parent" ? "/parent/dashboard" : "/student/dashboard");
   }
   return (
     <div className="grid min-h-screen bg-white lg:grid-cols-[1.05fr_.95fr]">
@@ -203,8 +233,8 @@ function Signup() {
           </div>
           <div>
             <span className="mb-2 block text-sm font-semibold text-text">Role</span>
-            <div className="grid grid-cols-2 gap-2">
-              {["Student", "Teacher"].map((item) => (
+            <div className="grid grid-cols-3 gap-2">
+              {["Student", "Teacher", "Parent"].map((item) => (
                 <button key={item} type="button" onClick={() => setRole(item)} className={`min-h-11 rounded-xl border px-3 text-sm font-bold ${role === item ? "border-primary bg-[#EEF3FF] text-primary" : "border-border text-muted"}`}>
                   {item}
                 </button>
@@ -237,6 +267,8 @@ function StudentDashboard() {
         <StatCard label="Sample Accuracy" value="92%" icon={Target} tone="green" />
         <StatCard label="MVP Scope" value="30%" icon={Sparkles} tone="orange" />
       </div>
+      <StudentProgressSummary />
+      <ReadingActivitiesPage />
       <div className="grid gap-6 xl:grid-cols-[1fr_320px]">
         <div className="space-y-6">
           <Card className="grid gap-6 md:grid-cols-[240px_1fr]">
@@ -398,6 +430,7 @@ function TeacherDashboard() {
         <Card><SectionTitle title="Class Performance" /><ResponsiveContainer width="100%" height={300}><AreaChart data={classPerformance}><CartesianGrid stroke="#E4E7F0" /><XAxis dataKey="name" /><YAxis /><Tooltip /><Area dataKey="accuracy" stroke="#4169F5" fill="#EEF3FF" /><Area dataKey="completion" stroke="#32A66A" fill="#E8F7EF" /></AreaChart></ResponsiveContainer></Card>
         <Card><SectionTitle title="Recent Activity" /><div className="space-y-4">{recentActivity.map((item) => <div key={item} className="rounded-xl bg-[#F8F9FD] p-4 text-sm font-medium text-muted">{item}</div>)}</div></Card>
       </div>
+      <SharedReadingProgress audience="teacher" />
       <Card><SectionTitle title="Students in Demo Class" /><Table headers={["Student", "Accuracy", "WCPM", "Progress", "Status", "Action"]} rows={students.map((s) => [<div className="flex items-center gap-3"><Avatar name={s.name} /><span className="font-bold">{s.name}</span></div>, `${s.accuracy}%`, s.wcpm, <ProgressBar value={s.progress} />, <Badge tone={s.status === "On Track" ? "green" : "orange"}>{s.status}</Badge>, <LinkButton to={`/teacher/students/${s.id}`} variant="outline">View</LinkButton>])} /></Card>
     </div>
   );
@@ -441,6 +474,7 @@ function ParentDashboard() {
       <PageTitle title="Welcome back!" subtitle="Anaya's reading progress is steady and easy to follow." />
       <Card className="grid gap-5 md:grid-cols-[auto_1fr_auto]"><Avatar name={currentStudent.name} size="lg" /><div><h2 className="text-2xl font-extrabold">{currentStudent.name}</h2><p className="text-muted">{currentStudent.grade} - {currentStudent.level}</p><ProgressBar value={currentStudent.progress} className="mt-4" /></div><div className="grid grid-cols-2 gap-3 text-center"><Metric label="Accuracy" value="92%" /><Metric label="WCPM" value="118" /></div></Card>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Lessons Completed" value="24" icon={BookOpen} /><StatCard label="Reading Time" value="12h" icon={Clock} tone="orange" /><StatCard label="Current Streak" value="7 days" icon={Sparkles} tone="green" /><StatCard label="Recent Assessment" value="91" icon={CheckCircle2} tone="purple" /></div>
+      <SharedReadingProgress audience="parent" />
       <div className="grid gap-6 xl:grid-cols-[1fr_360px]"><TrendChart title="Reading Progress" dataKey="accuracy" color="#4169F5" /><Card><SectionTitle title="How You Can Help" /><div className="space-y-3">{["Read together for 10 minutes each evening.", "Practice difficult words before a lesson.", "Build vocabulary by asking Anaya to explain new words.", "Encourage daily reading without rushing pace."].map((item) => <div key={item} className="rounded-xl bg-[#F8F9FD] p-4 text-sm font-medium text-muted">{item}</div>)}</div></Card></div>
     </div>
   );
