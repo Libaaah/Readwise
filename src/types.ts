@@ -34,6 +34,36 @@ export type Assessment = {
   accuracy: number;
   wcpm: number;
   pronunciation: number;
+  fluency: number;
+  readingLevel: string;
+  transcript: string;
+  errors: ReadingError[];
+  recommendations: string[];
+  source: "whisper" | "browser" | "manual";
+  kind?: "initial" | "lesson";
+};
+
+export type ReadingErrorType = "skipped" | "inserted" | "repeated" | "mispronounced" | "substituted";
+
+export type ReadingError = {
+  type: ReadingErrorType;
+  expected?: string;
+  heard?: string;
+};
+
+export type ReadingMetrics = {
+  expectedWords: number;
+  spokenWords: number;
+  matchedWords: number;
+  accuracy: number;
+  wcpm: number;
+  pronunciation: number;
+  fluency: number;
+  readingLevel: string;
+  errors: ReadingError[];
+  recommendations: string[];
+  transcript: string;
+  source: "whisper" | "browser" | "manual";
 };
 
 export type Student = {

@@ -137,6 +137,13 @@ export const assessments: Assessment[] = [
     accuracy: 94,
     wcpm: 122,
     pronunciation: 88,
+    fluency: 92,
+    readingLevel: "Level 4",
+    transcript: "",
+    errors: [],
+    recommendations: ["Keep reading aloud every day and try a slightly longer passage next."],
+    source: "manual",
+    kind: "lesson",
   },
   {
     id: "a-103",
@@ -149,6 +156,13 @@ export const assessments: Assessment[] = [
     accuracy: 89,
     wcpm: 112,
     pronunciation: 84,
+    fluency: 87,
+    readingLevel: "Level 3",
+    transcript: "",
+    errors: [],
+    recommendations: ["Practice the highlighted words slowly, then read the passage again."],
+    source: "manual",
+    kind: "lesson",
   },
 ];
 

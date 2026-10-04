@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit --project tsconfig.json && vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "backend": "python -m uvicorn backend.main:app --reload --port 8000"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
+    "firebase": "^12.19.0",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",

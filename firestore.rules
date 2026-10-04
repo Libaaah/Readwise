@@ -1,0 +1,62 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function accountProfile(userId) {
+      return get(/databases/$(database)/documents/accountProfiles/$(userId)).data;
+    }
+
+    function isTeacher() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/accountProfiles/$(request.auth.uid))
+        && accountProfile(request.auth.uid).role == "teacher";
+    }
+
+    function isLinkedParent(studentId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/accountProfiles/$(request.auth.uid))
+        && exists(/databases/$(database)/documents/accountProfiles/$(studentId))
+        && accountProfile(request.auth.uid).role == "parent"
+        && accountProfile(request.auth.uid).studentEmail == accountProfile(studentId).email;
+    }
+
+    match /accountProfiles/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isTeacher());
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.uid == userId
+        && request.resource.data.role in ["student", "teacher", "parent", "admin"];
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.uid == userId
+        && request.resource.data.role == resource.data.role;
+    }
+
+    match /studentDirectory/{studentEmail} {
+      allow read: if isTeacher()
+        || (signedIn()
+          && exists(/databases/$(database)/documents/accountProfiles/$(request.auth.uid))
+          && accountProfile(request.auth.uid).role == "parent"
+          && accountProfile(request.auth.uid).studentEmail == studentEmail);
+      allow create, update: if signedIn()
+        && exists(/databases/$(database)/documents/accountProfiles/$(request.auth.uid))
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email == studentEmail
+        && accountProfile(request.auth.uid).role == "student";
+    }
+
+    match /users/{userId}/{document=**} {
+      allow read, write: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /users/{userId}/lessonProgress/{lessonId} {
+      allow read: if signedIn()
+        && (request.auth.uid == userId || isTeacher() || isLinkedParent(userId));
+      allow write: if signedIn() && request.auth.uid == userId;
+    }
+  }
+}

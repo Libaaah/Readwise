@@ -1,19 +1,21 @@
-import { Bell, ChevronDown, Menu, Search, Settings, X } from "lucide-react";
+import { Bell, ChevronDown, LogOut, Menu, Search, Settings, X } from "lucide-react";
 import { useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { cn, initials } from "../utils";
 import type { Lesson, NavItem } from "../types";
 
+export function LogoArtwork({ className = "", alt = "ReadWise" }: { className?: string; alt?: string }) {
+  return (
+    <span className={cn("inline-flex h-20 w-20 shrink-0 items-center justify-center p-1", className)}>
+      <img src="/logo.png" alt={alt} className="block h-full w-full object-contain" />
+    </span>
+  );
+}
+
 export function Logo() {
   return (
     <Link to="/student/dashboard" className="flex items-center gap-3" aria-label="READWISE home">
-      <div className="grid h-10 w-10 place-items-center rounded-xl bg-primary text-base font-extrabold text-white shadow-soft">
-        RW
-      </div>
-      <div>
-        <div className="text-lg font-extrabold tracking-normal text-navy">READWISE</div>
-        <div className="text-xs font-medium text-muted">Read. Practice. Progress.</div>
-      </div>
+      <LogoArtwork alt="" />
     </Link>
   );
 }
@@ -300,15 +302,26 @@ export function Toast({ message }: { message: string }) {
   return message ? <div className="fixed bottom-5 right-5 z-50 rounded-xl bg-navy px-4 py-3 text-sm font-semibold text-white shadow-soft">{message}</div> : null;
 }
 
-export function Dropdown() {
+export function Dropdown({ onSignOut }: { onSignOut: () => Promise<void> }) {
+  const [open, setOpen] = useState(false);
   return (
-    <button className="flex items-center gap-2 rounded-xl border border-border bg-white px-3 py-2 text-sm font-semibold text-text">
-      Profile <ChevronDown className="h-4 w-4 text-muted" />
-    </button>
+    <div className="relative">
+      <button onClick={() => setOpen(!open)} className="flex items-center gap-2 rounded-xl border border-border bg-white px-3 py-2 text-sm font-semibold text-text">
+        Profile <ChevronDown className="h-4 w-4 text-muted" />
+      </button>
+      {open ? (
+        <div className="absolute right-0 mt-2 w-44 rounded-xl border border-border bg-white p-2 shadow-soft">
+          <button onClick={onSignOut} className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-sm font-semibold text-muted hover:bg-[#EEF3FF] hover:text-primary">
+            <LogOut className="h-4 w-4" />
+            Sign out
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
-export function AppLayout({ nav, children, user, subtitle }: { nav: NavItem[]; children: ReactNode; user: { name: string; role: string }; subtitle: string }) {
+export function AppLayout({ nav, children, user, subtitle, onSignOut }: { nav: NavItem[]; children: ReactNode; user: { name: string; role: string }; subtitle: string; onSignOut: () => Promise<void> }) {
   const [open, setOpen] = useState(false);
   const location = useLocation();
   return (
@@ -331,7 +344,7 @@ export function AppLayout({ nav, children, user, subtitle }: { nav: NavItem[]; c
               <Menu className="h-5 w-5" />
             </button>
             <div className="hidden flex-1 md:block">
-              <SearchBar value="" onChange={() => undefined} placeholder="Search demo lessons and students" />
+              <SearchBar value="" onChange={() => undefined} placeholder="Search lessons and students" />
             </div>
             <div className="ml-auto flex items-center gap-3">
               <button className="grid h-11 w-11 place-items-center rounded-xl border border-border bg-white" aria-label="Notifications">
@@ -342,7 +355,7 @@ export function AppLayout({ nav, children, user, subtitle }: { nav: NavItem[]; c
                 <div className="text-sm font-bold text-text">{user.name}</div>
                 <div className="text-xs font-medium text-muted">{subtitle}</div>
               </div>
-              <Dropdown />
+              <Dropdown onSignOut={onSignOut} />
             </div>
           </div>
         </header>
@@ -376,7 +389,7 @@ function SidebarContent({ nav, user, onNavigate }: { nav: NavItem[]; user: { nam
       <div className="mt-auto space-y-3">
         <NavLink to="/student/dashboard" className="flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold text-muted hover:bg-[#EEF3FF] hover:text-primary">
           <Settings className="h-5 w-5" />
-          MVP Settings
+            Settings
         </NavLink>
         <div className="flex items-center gap-3 rounded-2xl border border-border p-3">
           <Avatar name={user.name} />

@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { AlertCircle, ArrowLeft, CheckCircle2, Mic, Square } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Badge, Button, Card, LinkButton, ProgressBar, StatCard } from "./ui";
-import { compareReading, loadReadingProgress, readingActivities, saveReadingProgress, type ReadingProgress } from "../data/readingProgress";
+import { compareReading, readingActivities, saveReadingProgress, type ReadingProgress, useReadingProgress } from "../data/readingProgress";
+import { useAuth } from "../auth";
 
 type RecognitionAlternative = { transcript: string };
 type RecognitionResult = ArrayLike<RecognitionAlternative> & { isFinal: boolean };
@@ -22,7 +23,8 @@ type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 type SpeechWindow = Window & { SpeechRecognition?: SpeechRecognitionConstructor; webkitSpeechRecognition?: SpeechRecognitionConstructor };
 
 export function ReadingActivitiesPage() {
-  const { items, available } = loadReadingProgress();
+  const { user } = useAuth();
+  const { items, available } = useReadingProgress(user?.uid);
   return (
     <div className="space-y-6">
       <div><h1 className="text-3xl font-extrabold text-text">My Reading Activities</h1><p className="mt-2 text-muted">Choose a short passage, read it aloud, and see how you did.</p></div>
@@ -46,6 +48,8 @@ export function ReadingActivityPage() {
   const { activityId = "" } = useParams();
   const activity = readingActivities.find((item) => item.id === activityId);
   const navigate = useNavigate();
+  const { profile, user } = useAuth();
+  const studentName = profile?.name || user?.displayName || user?.email?.split("@")[0] || "Reader";
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -162,7 +166,7 @@ export function ReadingActivityPage() {
     try { recognitionRef.current?.stop(); } catch { /* Recognition may already be stopped. */ }
   }
 
-  function submitReading() {
+  async function submitReading() {
     if (!recorded || recording) {
       setError("Record and stop your reading before submitting it.");
       return;
@@ -179,7 +183,7 @@ export function ReadingActivityPage() {
     const completed: ReadingProgress = {
       activityId: selectedActivity.id,
       activityTitle: selectedActivity.title,
-      student: "Anaya Rao",
+      student: studentName,
       completed: true,
       accuracy: comparison?.accuracy ?? null,
       expectedWords: comparison?.expectedWords ?? selectedActivity.passage.split(/\s+/).filter(Boolean).length,
@@ -189,7 +193,7 @@ export function ReadingActivityPage() {
       differences: comparison?.differences ?? [],
     };
     setResult(completed);
-    setSaved(saveReadingProgress(completed));
+    setSaved(await saveReadingProgress(completed, user?.uid));
     setError("");
   }
 
@@ -214,7 +218,7 @@ export function ReadingActivityPage() {
       {result ? <Card className="space-y-5">
         <div className="flex items-center gap-2"><CheckCircle2 className="h-5 w-5 text-success" /><h2 className="text-2xl font-extrabold text-text">Reading Result</h2></div>
         <p className="font-semibold text-text">{feedback}</p>
-        {!saved ? <StorageNotice /> : <p className="text-sm text-success">Progress saved on this device.</p>}
+        {!saved ? <StorageNotice /> : <p className="text-sm text-success">Progress saved to your account.</p>}
         {result.accuracy === null ? <p className="text-sm text-muted">No transcript was returned. Reading accuracy cannot be calculated without recognized text.</p> : <>
           <div className="grid gap-4 sm:grid-cols-2"><StatCard label="Reading Accuracy" value={`${result.accuracy}%`} icon={CheckCircle2} tone={result.accuracy >= 90 ? "green" : result.accuracy >= 70 ? "orange" : "purple"} /><StatCard label="Words Matched" value={`${result.matchedWords} / ${result.expectedWords}`} icon={CheckCircle2} /></div>
           <div><div className="mb-2 flex justify-between text-sm font-semibold text-muted"><span>Reading Accuracy</span><span>{result.accuracy}%</span></div><ProgressBar value={result.accuracy} /></div>
@@ -228,7 +232,8 @@ export function ReadingActivityPage() {
 }
 
 export function StudentProgressSummary() {
-  const { items, available } = loadReadingProgress();
+  const { user } = useAuth();
+  const { items, available } = useReadingProgress(user?.uid);
   const latest = [...items].sort((a, b) => b.date.localeCompare(a.date))[0];
   return <Card className="space-y-4">
     <div><h2 className="text-xl font-extrabold text-text">My Progress</h2><p className="mt-1 text-sm text-muted">Your reading activity and latest result.</p></div>
@@ -238,9 +243,24 @@ export function StudentProgressSummary() {
   </Card>;
 }
 
-export function SharedReadingProgress({ audience }: { audience: "teacher" | "parent" }) {
-  const { items, available } = loadReadingProgress();
+export function SharedReadingProgress({ audience, studentUserId }: { audience: "teacher" | "parent"; studentUserId?: string }) {
+  const { profile, user } = useAuth();
+  const signedInName = profile?.name || user?.displayName || user?.email?.split("@")[0] || "the current user";
+  const studentLabel = profile?.role === "student" ? signedInName : "your student";
+  const { items, available } = useReadingProgress(audience === "parent" ? studentUserId : user?.uid);
   const latest = [...items].sort((a, b) => b.date.localeCompare(a.date))[0];
+  if (audience === "parent") return <Card className="space-y-4">
+    <div><h2 className="text-xl font-extrabold text-text">Reading Progress</h2><p className="mt-1 text-sm text-muted">Latest reading activity for {studentLabel}.</p></div>
+    {!available ? <StorageNotice /> : null}
+    <div className="grid gap-3 sm:grid-cols-3"><StatCard label="Activities Completed" value={`${items.length} / ${readingActivities.length}`} icon={CheckCircle2} tone="green" /><StatCard label="Latest Reading Accuracy" value={latest?.accuracy === null || !latest ? "-" : `${latest.accuracy}%`} icon={CheckCircle2} tone="purple" /><div className="rounded-2xl border border-border bg-white p-4"><div className="text-sm font-bold text-text">{latest?.activityTitle ?? "No activity completed yet"}</div><div className="mt-1 text-xs text-muted">Latest activity</div></div></div>
+    <div><div className="mb-2 flex justify-between text-xs font-semibold text-muted"><span>Activity completion</span><span>{Math.round((items.length / readingActivities.length) * 100)}%</span></div><ProgressBar value={(items.length / readingActivities.length) * 100} /></div>
+  </Card>;
+
+  return <Card className="space-y-4"><div><h2 className="text-xl font-extrabold text-text">Student Reading Progress</h2><p className="mt-1 text-sm text-muted">Latest saved activity results for {studentLabel}.</p></div>{!available ? <StorageNotice /> : null}<div className="overflow-x-auto"><table className="w-full min-w-[460px] text-left text-sm"><thead><tr className="text-muted"><th className="px-3 py-2">Activity</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Accuracy</th><th className="px-3 py-2">Date</th></tr></thead><tbody>{readingActivities.map((activity) => {
+    const progress = items.find((item) => item.activityId === activity.id);
+    return <tr key={activity.id} className="border-t border-border"><td className="px-3 py-3 font-semibold text-text">{activity.title}</td><td className="px-3 py-3">{progress ? <Badge tone="green">Completed</Badge> : <Badge tone="gray">Not completed</Badge>}</td><td className="px-3 py-3">{progress?.accuracy === null || !progress ? "-" : `${progress.accuracy}%`}</td><td className="px-3 py-3 text-muted">{progress ? new Date(progress.date).toLocaleDateString() : "-"}</td></tr>;
+  })}</tbody></table></div>{latest ? <div className="rounded-xl bg-[#F8F9FD] p-4 text-sm text-muted">Latest: <span className="font-bold text-text">{latest.activityTitle}</span> - {latest.accuracy === null ? "speech-to-text unavailable" : `${latest.accuracy}% reading accuracy`}</div> : null}</Card>;
+
   if (audience === "parent") return <Card className="space-y-4">
     <div><h2 className="text-xl font-extrabold text-text">Reading Progress</h2><p className="mt-1 text-sm text-muted">Anaya’s latest reading activity.</p></div>
     {!available ? <StorageNotice /> : null}
@@ -255,5 +275,5 @@ export function SharedReadingProgress({ audience }: { audience: "teacher" | "par
 }
 
 function StorageNotice() {
-  return <p className="flex items-start gap-2 rounded-xl bg-[#FFF4DE] p-3 text-sm text-[#805500]" role="status"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />Local storage is unavailable. Progress will not persist after leaving this page.</p>;
+  return <p className="flex items-start gap-2 rounded-xl bg-[#FFF4DE] p-3 text-sm text-[#805500]" role="status"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />We could not connect to your account data. Check your connection and try again.</p>;
 }
