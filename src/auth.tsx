@@ -42,34 +42,82 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const profileKey = (uid: string) => `readwise-auth-profile:${uid}`;
-
 export type StudentAccount = { uid: string; name: string; email: string };
 type StudentDirectoryState = { accounts: StudentAccount[]; available: boolean; loading: boolean };
 
 export function useStudentAccounts() {
   const [state, setState] = useState<StudentDirectoryState>({ accounts: [], available: true, loading: true });
   useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      setState((current) => current.loading
-        ? { ...current, available: false, loading: false }
-        : current);
+    let directoryAccounts: StudentAccount[] = [];
+    let profileAccounts: StudentAccount[] = [];
+    let directoryLoaded = false;
+    let profilesLoaded = false;
+    let directoryAvailable = true;
+    let profilesAvailable = true;
+    const loadingTimeout = window.setTimeout(() => {
+      if (!directoryLoaded) {
+        directoryLoaded = true;
+        directoryAvailable = false;
+      }
+      if (!profilesLoaded) {
+        profilesLoaded = true;
+        profilesAvailable = false;
+      }
+      publish();
     }, 10000);
-    const unsubscribe = onSnapshot(
+    const publish = () => {
+      if (directoryLoaded && profilesLoaded) window.clearTimeout(loadingTimeout);
+      const merged = new Map<string, StudentAccount>();
+      for (const account of directoryAccounts) merged.set(account.uid, account);
+      for (const account of profileAccounts) {
+        const existing = merged.get(account.uid);
+        merged.set(account.uid, { ...existing, ...account, name: account.name || existing?.name || account.email });
+      }
+      setState({
+        accounts: [...merged.values()].sort((left, right) => left.name.localeCompare(right.name)),
+        available: directoryAvailable || profilesAvailable,
+        loading: !(directoryLoaded && profilesLoaded),
+      });
+    };
+    const unsubscribeDirectory = onSnapshot(
       collection(db, "studentDirectory"),
       (snapshot) => {
-        window.clearTimeout(timeout);
-        const accounts = snapshot.docs.map((entry) => entry.data() as StudentAccount);
-        setState({ accounts, available: true, loading: false });
+        directoryLoaded = true;
+        directoryAccounts = snapshot.docs
+          .map((entry) => entry.data() as StudentAccount)
+          .filter((account) => Boolean(account.uid && account.email));
+        publish();
       },
       () => {
-        window.clearTimeout(timeout);
-        setState((current) => ({ ...current, available: false, loading: false }));
+        directoryLoaded = true;
+        directoryAvailable = false;
+        publish();
+      },
+    );
+    const unsubscribeProfiles = onSnapshot(
+      collection(db, "accountProfiles"),
+      (snapshot) => {
+        profilesLoaded = true;
+        profileAccounts = snapshot.docs
+          .filter((entry) => entry.data().role === "student")
+          .map((entry) => ({
+            uid: entry.id,
+            name: typeof entry.data().name === "string" ? entry.data().name : "",
+            email: typeof entry.data().email === "string" ? entry.data().email : "",
+          }))
+          .filter((account) => Boolean(account.email));
+        publish();
+      },
+      () => {
+        profilesLoaded = true;
+        profilesAvailable = false;
+        publish();
       },
     );
     return () => {
-      window.clearTimeout(timeout);
-      unsubscribe();
+      window.clearTimeout(loadingTimeout);
+      unsubscribeDirectory();
+      unsubscribeProfiles();
     };
   }, []);
   return state;
@@ -91,79 +139,33 @@ export function useStudentAccountByEmail(email?: string | null) {
   return state;
 }
 
-function fallbackRole(email?: string | null): Role {
-  const prefix = email?.split("@")[0]?.toLowerCase() ?? "";
-  if (prefix.includes("teacher")) return "teacher";
-  if (prefix.includes("parent")) return "parent";
-  if (prefix.includes("admin")) return "admin";
-  return "student";
-}
-
-function readProfile(user: User): AuthProfile {
-  const stored = readStoredProfile(user);
-  if (stored) return stored;
-  return {
-    name: user.displayName || user.email?.split("@")[0] || "Readwise User",
-    role: fallbackRole(user.email),
-  };
-}
-
-function readStoredProfile(user: User): AuthProfile | null {
-  const stored = localStorage.getItem(profileKey(user.uid));
-  if (stored) {
-    try {
-      const profile: unknown = JSON.parse(stored);
-      if (typeof profile === "object" && profile !== null && "name" in profile && typeof profile.name === "string" && "role" in profile && isRole(profile.role)) {
-        return {
-          name: profile.name,
-          role: profile.role,
-          ...("studentEmail" in profile && typeof profile.studentEmail === "string" ? { studentEmail: profile.studentEmail } : {}),
-        };
-      }
-    } catch {
-      localStorage.removeItem(profileKey(user.uid));
-    }
-  }
-  return null;
-}
-
 function isRole(role: unknown): role is Role {
   return role === "student" || role === "teacher" || role === "parent" || role === "admin";
 }
 
-function loadProfile(user: User, fallback: AuthProfile = readProfile(user)): Promise<AuthProfile> {
-  const storedProfile = readStoredProfile(user);
-  return new Promise((resolve) => {
-    const timeout = window.setTimeout(() => resolve(fallback), 4000);
+function loadProfile(user: User): Promise<AuthProfile | null> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error("Timed out loading the Firebase account role.")), 4000);
     void getDoc(doc(db, "accountProfiles", user.uid)).then((snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        if (isRole(data.role) && typeof data.name === "string") {
-          if (data.role === "student" && storedProfile && storedProfile.role !== "student") {
-            saveProfile(user, storedProfile);
-            resolve(storedProfile);
-            return;
-          }
-          const profile: AuthProfile = {
-            name: data.name,
-            role: data.role,
-            ...(typeof data.studentEmail === "string" ? { studentEmail: data.studentEmail } : {}),
-          };
-          saveProfile(user, profile);
-          resolve(profile);
-          return;
-        }
+      if (!snapshot.exists()) {
+        resolve(null);
+        return;
       }
-      resolve(fallback);
+      const data = snapshot.data();
+      if (!isRole(data.role) || typeof data.name !== "string") {
+        resolve(null);
+        return;
+      }
+      resolve({
+        name: data.name,
+        role: data.role,
+        ...(typeof data.studentEmail === "string" ? { studentEmail: data.studentEmail } : {}),
+      });
     }).catch((error: unknown) => {
       console.error("Could not load the signed-in account profile from Firestore.", error);
-      resolve(fallback);
+      reject(error);
     }).finally(() => window.clearTimeout(timeout));
   });
-}
-
-function saveProfile(user: User, profile: AuthProfile) {
-  localStorage.setItem(profileKey(user.uid), JSON.stringify(profile));
 }
 
 async function syncAccountDocuments(user: User, profile: AuthProfile) {
@@ -186,12 +188,6 @@ async function syncAccountDocuments(user: User, profile: AuthProfile) {
   }
 }
 
-function syncAccountDocumentsSafely(user: User, profile: AuthProfile) {
-  void syncAccountDocuments(user, profile).catch((error: unknown) => {
-    console.error("Could not sync the signed-in account to Firestore.", error);
-  });
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<AuthProfile | null>(null);
@@ -207,17 +203,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoading(false);
         return;
       }
-      const cachedProfile = readProfile(nextUser);
-      setProfile(cachedProfile);
-      setLoading(false);
-      void loadProfile(nextUser, cachedProfile).then((nextProfile) => {
+      setProfile(null);
+      setLoading(true);
+      void loadProfile(nextUser).then((nextProfile) => {
         if (profileRequest.current !== requestId) return;
         setProfile(nextProfile);
-        syncAccountDocumentsSafely(nextUser, nextProfile);
+        setLoading(false);
       }).catch((error: unknown) => {
         console.error("Could not load the signed-in account profile from Firestore.", error);
         if (profileRequest.current !== requestId) return;
-        setProfile(readProfile(nextUser));
+        setProfile(null);
+        setLoading(false);
       });
     });
 
@@ -228,24 +224,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async function signIn(email: string, password: string, studentEmail?: string) {
       const credential = await signInWithEmailAndPassword(auth, email, password);
       const requestId = ++profileRequest.current;
-      const storedProfile = readProfile(credential.user);
-      const nextProfile = storedProfile.role === "parent" && studentEmail
-        ? { ...storedProfile, studentEmail: studentEmail.trim().toLowerCase() }
-        : storedProfile;
-      if (nextProfile !== storedProfile) saveProfile(credential.user, nextProfile);
+      const remoteProfile = await loadProfile(credential.user);
+      if (!remoteProfile) {
+        throw Object.assign(new Error("No valid Firebase role profile exists for this account."), { code: "profile/missing" });
+      }
+      const nextProfile = remoteProfile.role === "parent" && studentEmail
+        ? { ...remoteProfile, studentEmail: studentEmail.trim().toLowerCase() }
+        : remoteProfile;
       if (profileRequest.current === requestId) setProfile(nextProfile);
-      void loadProfile(credential.user, nextProfile).then((remoteProfile) => {
-        const refreshedProfile = remoteProfile.role === "parent" && studentEmail
-          ? { ...remoteProfile, studentEmail: studentEmail.trim().toLowerCase() }
-          : remoteProfile;
-        if (profileRequest.current === requestId) {
-          setProfile(refreshedProfile);
-          syncAccountDocumentsSafely(credential.user, refreshedProfile);
-        }
-      }).catch((error: unknown) => {
-        console.error("Could not refresh the signed-in account profile from Firestore.", error);
-      });
-      if (nextProfile.role === "parent" && studentEmail) syncAccountDocumentsSafely(credential.user, nextProfile);
+      await syncAccountDocuments(credential.user, nextProfile);
       return nextProfile.role;
     }
 
@@ -258,31 +245,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...(input.role === "parent" && input.studentEmail ? { studentEmail: input.studentEmail } : {}),
       };
       profileRequest.current += 1;
-      saveProfile(credential.user, nextProfile);
-      syncAccountDocumentsSafely(credential.user, nextProfile);
+      await syncAccountDocuments(credential.user, nextProfile);
       setProfile(nextProfile);
       return nextProfile.role;
     }
 
-    async function socialSignIn(provider: typeof googleProvider, role: Role = "student") {
+    async function socialSignIn(provider: typeof googleProvider, role?: Role) {
       const credential = await signInWithPopup(auth, provider);
       const requestId = ++profileRequest.current;
-      const storedProfile = localStorage.getItem(profileKey(credential.user.uid));
-      const fallbackProfile = storedProfile
-        ? readProfile(credential.user)
-        : {
-            name: credential.user.displayName || credential.user.email?.split("@")[0] || "Readwise User",
-            role,
-          };
-      saveProfile(credential.user, fallbackProfile);
-      setProfile(fallbackProfile);
-      void loadProfile(credential.user, fallbackProfile).then((nextProfile) => {
-        if (profileRequest.current === requestId) setProfile(nextProfile);
-      }).catch((error: unknown) => {
-        console.error("Could not refresh the signed-in account profile from Firestore.", error);
-      });
-      if (!storedProfile) syncAccountDocumentsSafely(credential.user, fallbackProfile);
-      return fallbackProfile.role;
+      const existingProfile = await loadProfile(credential.user);
+      if (!existingProfile && !role) {
+        throw Object.assign(new Error("No valid Firebase role profile exists for this account."), { code: "profile/missing" });
+      }
+      const nextProfile: AuthProfile = existingProfile ?? {
+        name: credential.user.displayName || credential.user.email?.split("@")[0] || "Readwise User",
+        role: role!,
+      };
+      if (profileRequest.current === requestId) setProfile(nextProfile);
+      await syncAccountDocuments(credential.user, nextProfile);
+      return nextProfile.role;
     }
 
     return {

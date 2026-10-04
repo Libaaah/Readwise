@@ -154,7 +154,7 @@ const studentNav: NavItem[] = [
 
 const teacherNav: NavItem[] = [
   { label: "Dashboard", path: "/teacher/dashboard", icon: Home },
-  { label: "Students", path: "/teacher/students/anaya", icon: Users },
+  { label: "Students", path: "/teacher/dashboard", icon: Users },
   { label: "Class Overview", path: "/teacher/dashboard", icon: BarChart3 },
 ];
 
@@ -185,9 +185,11 @@ function LoadingScreen() {
 }
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { loading, user } = useAuth();
+  const { loading, user, profile } = useAuth();
   if (loading) return <LoadingScreen />;
-  return user ? <>{children}</> : <Navigate to="/login" replace />;
+  if (!user) return <Navigate to="/login" replace />;
+  if (!profile) return <div className="grid min-h-screen place-items-center bg-surface p-6 text-center text-sm font-semibold text-danger">Could not load a valid account role from Firebase. Check Firestore permissions and confirm accountProfiles has this user’s UID and role.</div>;
+  return <>{children}</>;
 }
 
 function RoleGuard({ role, children }: { role: Role; children: React.ReactNode }) {
@@ -208,6 +210,7 @@ function Shell({ nav, subtitle, children }: { nav: NavItem[]; subtitle: string; 
 
 function firebaseErrorMessage(error: unknown) {
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+  if (code === "profile/missing") return "This account has no valid role in Firestore. Ask the project owner to add accountProfiles/{UID} with the correct role, then sign in again.";
   if (code.includes("auth/invalid-credential")) return "Email or password is incorrect.";
   if (code.includes("auth/email-already-in-use")) return "An account already exists for this email.";
   if (code.includes("auth/popup-closed-by-user")) return "The sign-in popup was closed before finishing.";
@@ -243,14 +246,12 @@ function AuthVisual() {
 
 function Login() {
   const navigate = useNavigate();
-  const { isConfigured, loading: authLoading, resetPassword, signIn, signInWithGoogle, signInWithMicrosoft, user, profile } = useAuth();
+  const { isConfigured, resetPassword, signIn, signInWithGoogle, signInWithMicrosoft, user } = useAuth();
   const [show, setShow] = useState(false);
   const [values, setValues] = useState({ email: "", password: "", studentEmail: "" });
   const [parentLogin, setParentLogin] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
-
-  if (!authLoading && user) return <Navigate to={routeForRole(profile?.role ?? "student")} replace />;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -308,6 +309,7 @@ function Login() {
             <h1 className="text-3xl font-extrabold text-text">Welcome back!</h1>
             <p className="mt-2 text-muted">Sign in to continue your reading practice.</p>
           </div>
+          {user ? <p className="rounded-xl bg-[#EEF3FF] p-3 text-sm font-medium text-primary">Currently signed in as {user.email}. Sign in below to switch accounts.</p> : null}
           {!isConfigured ? <p className="rounded-xl bg-[#FFF4DE] p-3 text-sm font-medium text-[#9A6500]">Add your Firebase environment variables before using authentication.</p> : null}
           <Input label="Email" type="email" value={values.email} onChange={(e) => setValues({ ...values, email: e.target.value })} error={errors.email} />
           <label className="flex items-center gap-3 text-sm font-semibold text-text"><input type="checkbox" checked={parentLogin} onChange={(e) => setParentLogin(e.target.checked)} className="h-4 w-4" />I am signing in as a parent</label>
