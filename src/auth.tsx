@@ -10,7 +10,7 @@ import {
 } from "firebase/auth";
 import { collection, doc, getDoc, onSnapshot, setDoc } from "firebase/firestore";
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { auth, db, googleProvider, isFirebaseConfigured, microsoftProvider } from "./firebase";
+import { auth, db, googleProvider, isFirebaseConfigured } from "./firebase";
 import type { Role } from "./types";
 
 type AuthProfile = {
@@ -35,7 +35,6 @@ type AuthContextValue = {
   signIn: (email: string, password: string, studentEmail?: string) => Promise<Role>;
   signUp: (input: SignupInput) => Promise<Role>;
   signInWithGoogle: (role?: Role) => Promise<Role>;
-  signInWithMicrosoft: (role?: Role) => Promise<Role>;
   resetPassword: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
@@ -223,7 +222,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthContextValue>(() => {
     async function signIn(email: string, password: string, studentEmail?: string) {
       const credential = await signInWithEmailAndPassword(auth, email, password);
-      const requestId = ++profileRequest.current;
       const remoteProfile = await loadProfile(credential.user);
       if (!remoteProfile) {
         throw Object.assign(new Error("No valid Firebase role profile exists for this account."), { code: "profile/missing" });
@@ -231,7 +229,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const nextProfile = remoteProfile.role === "parent" && studentEmail
         ? { ...remoteProfile, studentEmail: studentEmail.trim().toLowerCase() }
         : remoteProfile;
-      if (profileRequest.current === requestId) setProfile(nextProfile);
+      if (auth.currentUser?.uid === credential.user.uid) {
+        profileRequest.current += 1;
+        setUser(credential.user);
+        setProfile(nextProfile);
+        setLoading(false);
+      }
       await syncAccountDocuments(credential.user, nextProfile);
       return nextProfile.role;
     }
@@ -246,13 +249,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       };
       profileRequest.current += 1;
       await syncAccountDocuments(credential.user, nextProfile);
-      setProfile(nextProfile);
+      profileRequest.current += 1;
+      await firebaseSignOut(auth);
+      setUser(null);
+      setProfile(null);
+      setLoading(false);
       return nextProfile.role;
     }
 
     async function socialSignIn(provider: typeof googleProvider, role?: Role) {
       const credential = await signInWithPopup(auth, provider);
-      const requestId = ++profileRequest.current;
       const existingProfile = await loadProfile(credential.user);
       if (!existingProfile && !role) {
         throw Object.assign(new Error("No valid Firebase role profile exists for this account."), { code: "profile/missing" });
@@ -261,7 +267,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         name: credential.user.displayName || credential.user.email?.split("@")[0] || "Readwise User",
         role: role!,
       };
-      if (profileRequest.current === requestId) setProfile(nextProfile);
+      if (auth.currentUser?.uid === credential.user.uid) {
+        profileRequest.current += 1;
+        setUser(credential.user);
+        setProfile(nextProfile);
+        setLoading(false);
+      }
       await syncAccountDocuments(credential.user, nextProfile);
       return nextProfile.role;
     }
@@ -274,7 +285,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signIn,
       signUp,
       signInWithGoogle: (role?: Role) => socialSignIn(googleProvider, role),
-      signInWithMicrosoft: (role?: Role) => socialSignIn(microsoftProvider, role),
       resetPassword: (email: string) => sendPasswordResetEmail(auth, email),
       signOut: () => firebaseSignOut(auth),
     };

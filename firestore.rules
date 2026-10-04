@@ -58,5 +58,11 @@ service cloud.firestore {
         && (request.auth.uid == userId || isTeacher() || isLinkedParent(userId));
       allow write: if signedIn() && request.auth.uid == userId;
     }
+
+    match /users/{userId}/assessmentAttempts/{attemptId} {
+      allow read: if signedIn()
+        && (request.auth.uid == userId || isTeacher() || isLinkedParent(userId));
+      allow write: if signedIn() && request.auth.uid == userId;
+    }
   }
 }

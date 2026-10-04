@@ -24,13 +24,15 @@ import {
   VolumeX,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Area,
   AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
+  ComposedChart,
+  Legend,
   Line,
   LineChart as ReLineChart,
   ResponsiveContainer,
@@ -62,7 +64,7 @@ import { assessments, assignments, classPerformance, currentStudent, lessons, mo
 import { routeForRole, useAuth, useStudentAccountByEmail, useStudentAccounts } from "./auth";
 import { analyzeLesson } from "./data/readingAnalysis";
 import { transcribeWithWhisper } from "./data/speech";
-import { completeUserLesson, lessonsForUser, loadUserLessonProgress, startUserLesson, useUserLessonProgress, useUserProgressStatsForUsers, userAssessmentHistory, userProgressStats } from "./data/userProgress";
+import { completeUserLesson, lessonsForUser, loadUserLessonProgress, startUserLesson, useUserAssessmentAttempts, useUserLessonProgress, useUserProgressStatsForUsers, userProgressStats } from "./data/userProgress";
 import type { NavItem, ReadingMetrics, Role, Student } from "./types";
 
 type RecognitionAlternative = { transcript: string };
@@ -149,13 +151,12 @@ function spokenWordProgress(referenceWords: string[], text: string) {
 const studentNav: NavItem[] = [
   { label: "Dashboard", path: "/student/dashboard", icon: Home },
   { label: "My Lessons", path: "/student/lessons", icon: BookOpen },
-  { label: "Reading Results", path: "/student/assessment/a-104", icon: Star },
+  { label: "Reading Results", path: "/student/results", icon: LineChart },
 ];
 
 const teacherNav: NavItem[] = [
-  { label: "Dashboard", path: "/teacher/dashboard", icon: Home },
-  { label: "Students", path: "/teacher/dashboard", icon: Users },
-  { label: "Class Overview", path: "/teacher/dashboard", icon: BarChart3 },
+  { label: "Class Overview", path: "/teacher/class-overview", icon: BarChart3 },
+  { label: "Students", path: "/teacher/students", icon: Users },
 ];
 
 const parentNav: NavItem[] = [
@@ -171,8 +172,11 @@ export default function App() {
       <Route path="/student/dashboard" element={<AuthGuard><RoleGuard role="student"><Shell nav={studentNav} subtitle="Grade 4 - Level 3"><StudentDashboard /></Shell></RoleGuard></AuthGuard>} />
       <Route path="/student/lessons" element={<AuthGuard><RoleGuard role="student"><Shell nav={studentNav} subtitle="Grade 4 - Level 3"><LessonsPage /></Shell></RoleGuard></AuthGuard>} />
       <Route path="/student/reading/:lessonId" element={<AuthGuard><RoleGuard role="student"><Shell nav={studentNav} subtitle="Grade 4 - Level 3"><ReadingPage /></Shell></RoleGuard></AuthGuard>} />
+      <Route path="/student/results" element={<AuthGuard><RoleGuard role="student"><Shell nav={studentNav} subtitle="Grade 4 - Level 3"><OverallReadingResultsPage /></Shell></RoleGuard></AuthGuard>} />
       <Route path="/student/assessment/:assessmentId" element={<AuthGuard><RoleGuard role="student"><Shell nav={studentNav} subtitle="Grade 4 - Level 3"><AssessmentPage /></Shell></RoleGuard></AuthGuard>} />
-      <Route path="/teacher/dashboard" element={<AuthGuard><RoleGuard role="teacher"><Shell nav={teacherNav} subtitle="Grade 4 Reading"><TeacherDashboard /></Shell></RoleGuard></AuthGuard>} />
+      <Route path="/teacher/dashboard" element={<AuthGuard><RoleGuard role="teacher"><Navigate to="/teacher/class-overview" replace /></RoleGuard></AuthGuard>} />
+      <Route path="/teacher/students" element={<AuthGuard><RoleGuard role="teacher"><Shell nav={teacherNav} subtitle="Grade 4 Reading"><TeacherStudentsPage /></Shell></RoleGuard></AuthGuard>} />
+      <Route path="/teacher/class-overview" element={<AuthGuard><RoleGuard role="teacher"><Shell nav={teacherNav} subtitle="Grade 4 Reading"><TeacherClassOverview /></Shell></RoleGuard></AuthGuard>} />
       <Route path="/teacher/students/:studentId" element={<AuthGuard><RoleGuard role="teacher"><Shell nav={teacherNav} subtitle="Grade 4 Reading"><StudentPerformance /></Shell></RoleGuard></AuthGuard>} />
       <Route path="/parent/dashboard" element={<AuthGuard><RoleGuard role="parent"><Shell nav={parentNav} subtitle="Family reading view"><ParentDashboard /></Shell></RoleGuard></AuthGuard>} />
       <Route path="*" element={<Navigate to="/student/dashboard" replace />} />
@@ -210,7 +214,7 @@ function Shell({ nav, subtitle, children }: { nav: NavItem[]; subtitle: string; 
 
 function firebaseErrorMessage(error: unknown) {
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
-  if (code === "profile/missing") return "This account has no valid role in Firestore. Ask the project owner to add accountProfiles/{UID} with the correct role, then sign in again.";
+  if (code === "profile/missing") return "This Google account is not set up in READWISE yet. Select “Create an account,” choose your role, and continue with the same Google account.";
   if (code.includes("auth/invalid-credential")) return "Email or password is incorrect.";
   if (code.includes("auth/email-already-in-use")) return "An account already exists for this email.";
   if (code.includes("auth/popup-closed-by-user")) return "The sign-in popup was closed before finishing.";
@@ -228,30 +232,28 @@ function AuthVisual() {
         <h1 className="mt-4 max-w-xl text-5xl font-extrabold leading-tight tracking-normal">Read Better. Grow Every Day.</h1>
         <p className="mt-5 max-w-lg text-lg leading-8 text-white/75">Build confidence through guided lessons, read-aloud practice, and meaningful progress.</p>
       </div>
-      <div className="relative grid grid-cols-3 gap-4">
-        {[
-          ["Reading lessons", "5"],
-          ["Practice modes", "2"],
-          ["Progress insights", "24/7"],
-        ].map(([label, value]) => (
-          <div key={label} className="rounded-2xl border border-white/15 bg-white/10 p-5 backdrop-blur">
-            <div className="text-3xl font-extrabold">{value}</div>
-            <div className="mt-1 text-sm text-white/70">{label}</div>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
 
 function Login() {
   const navigate = useNavigate();
-  const { isConfigured, resetPassword, signIn, signInWithGoogle, signInWithMicrosoft, user } = useAuth();
+  const location = useLocation();
+  const { isConfigured, resetPassword, signIn, signInWithGoogle } = useAuth();
   const [show, setShow] = useState(false);
   const [values, setValues] = useState({ email: "", password: "", studentEmail: "" });
   const [parentLogin, setParentLogin] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  const signupNotice = (location.state as { notice?: string } | null)?.notice;
+  const [showSignupNotice, setShowSignupNotice] = useState(Boolean(signupNotice));
+
+  useEffect(() => {
+    if (!signupNotice) return;
+    setShowSignupNotice(true);
+    const timeout = window.setTimeout(() => setShowSignupNotice(false), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [signupNotice]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -287,10 +289,10 @@ function Login() {
     }
   }
 
-  async function handleSocial(provider: "google" | "microsoft") {
+  async function handleGoogleSignIn() {
     setSubmitting(true);
     try {
-      const role = provider === "google" ? await signInWithGoogle() : await signInWithMicrosoft();
+      const role = await signInWithGoogle();
       navigate(routeForRole(role));
     } catch (error) {
       setErrors({ credentials: firebaseErrorMessage(error) });
@@ -309,13 +311,13 @@ function Login() {
             <h1 className="text-3xl font-extrabold text-text">Welcome back!</h1>
             <p className="mt-2 text-muted">Sign in to continue your reading practice.</p>
           </div>
-          {user ? <p className="rounded-xl bg-[#EEF3FF] p-3 text-sm font-medium text-primary">Currently signed in as {user.email}. Sign in below to switch accounts.</p> : null}
+          {signupNotice && showSignupNotice ? <p className="rounded-xl bg-[#E8F7EF] p-3 text-sm font-medium text-success" role="status">{signupNotice}</p> : null}
           {!isConfigured ? <p className="rounded-xl bg-[#FFF4DE] p-3 text-sm font-medium text-[#9A6500]">Add your Firebase environment variables before using authentication.</p> : null}
-          <Input label="Email" type="email" value={values.email} onChange={(e) => setValues({ ...values, email: e.target.value })} error={errors.email} />
+          <Input label="Email" type="email" required value={values.email} onChange={(e) => setValues({ ...values, email: e.target.value })} error={errors.email} />
           <label className="flex items-center gap-3 text-sm font-semibold text-text"><input type="checkbox" checked={parentLogin} onChange={(e) => setParentLogin(e.target.checked)} className="h-4 w-4" />I am signing in as a parent</label>
-          {parentLogin ? <Input label="Student email address" type="email" value={values.studentEmail} onChange={(e) => setValues({ ...values, studentEmail: e.target.value })} error={errors.studentEmail} placeholder="student@example.com" /> : null}
+          {parentLogin ? <Input label="Student email address" type="email" required value={values.studentEmail} onChange={(e) => setValues({ ...values, studentEmail: e.target.value })} error={errors.studentEmail} placeholder="student@example.com" /> : null}
           <div>
-            <Input label="Password" type={show ? "text" : "password"} value={values.password} onChange={(e) => setValues({ ...values, password: e.target.value })} error={errors.password} />
+            <Input label="Password" type={show ? "text" : "password"} required value={values.password} onChange={(e) => setValues({ ...values, password: e.target.value })} error={errors.password} />
             <div className="mt-2 flex justify-between text-sm">
               <button type="button" onClick={() => setShow(!show)} className="font-semibold text-primary">{show ? "Hide" : "Show"} password</button>
               <button type="button" onClick={handleResetPassword} className="font-semibold text-primary">Forgot password?</button>
@@ -324,10 +326,7 @@ function Login() {
           {errors.credentials ? <p className="text-sm font-medium text-danger" role="alert">{errors.credentials}</p> : null}
           {errors.notice ? <p className="text-sm font-medium text-success" role="status">{errors.notice}</p> : null}
           <Button className="w-full" type="submit" loading={submitting} disabled={!isConfigured}>Sign In</Button>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Button type="button" variant="outline" disabled={!isConfigured || submitting} onClick={() => handleSocial("google")}>Google</Button>
-            <Button type="button" variant="outline" disabled={!isConfigured || submitting} onClick={() => handleSocial("microsoft")}>Microsoft</Button>
-          </div>
+          <Button className="w-full" type="button" variant="outline" disabled={!isConfigured || submitting} onClick={handleGoogleSignIn}>Google</Button>
           <p className="text-center text-sm text-muted">New to READWISE? <a className="font-bold text-primary" href="/signup">Create an account</a></p>
         </form>
       </main>
@@ -337,9 +336,8 @@ function Login() {
 
 function Signup() {
   const navigate = useNavigate();
-  const { isConfigured, signInWithGoogle, signInWithMicrosoft, signUp } = useAuth();
+  const { isConfigured, signInWithGoogle, signOut, signUp } = useAuth();
   const [role, setRole] = useState<Role>("student");
-  const [accepted, setAccepted] = useState(false);
   const [values, setValues] = useState({ name: "", email: "", password: "", confirm: "", studentEmail: "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -352,14 +350,13 @@ function Signup() {
     if (values.password.length < 6) next.password = "Use at least 6 characters.";
     if (values.password !== values.confirm) next.confirm = "Passwords must match.";
     if (role === "parent" && !values.studentEmail.includes("@")) next.studentEmail = "Enter your student's email address.";
-    if (!accepted) next.terms = "Accept the terms to continue.";
     setErrors(next);
     if (Object.keys(next).length) return;
 
     setSubmitting(true);
     try {
       const nextRole = await signUp({ name: values.name.trim(), email: values.email.trim(), password: values.password, role, studentEmail: values.studentEmail.trim().toLowerCase() });
-      navigate(routeForRole(nextRole));
+      navigate("/login", { replace: true, state: { notice: `Your ${nextRole} account was created. Please sign in to continue.` } });
     } catch (error) {
       setErrors({ credentials: firebaseErrorMessage(error) });
     } finally {
@@ -367,11 +364,12 @@ function Signup() {
     }
   }
 
-  async function handleSocial(provider: "google" | "microsoft") {
+  async function handleGoogleSignUp() {
     setSubmitting(true);
     try {
-      const nextRole = provider === "google" ? await signInWithGoogle(role) : await signInWithMicrosoft(role);
-      navigate(routeForRole(nextRole));
+      const nextRole = await signInWithGoogle(role);
+      await signOut();
+      navigate("/login", { replace: true, state: { notice: `Your ${nextRole} account was created. Please sign in to continue.` } });
     } catch (error) {
       setErrors({ credentials: firebaseErrorMessage(error) });
     } finally {
@@ -386,12 +384,12 @@ function Signup() {
         <form onSubmit={submit} className="w-full max-w-md space-y-4">
           <h1 className="text-3xl font-extrabold text-text">Create your account</h1>
           {!isConfigured ? <p className="rounded-xl bg-[#FFF4DE] p-3 text-sm font-medium text-[#9A6500]">Add your Firebase environment variables before creating accounts.</p> : null}
-          <Input label="Full name" value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} error={errors.name} />
-          <Input label="Email" type="email" value={values.email} onChange={(e) => setValues({ ...values, email: e.target.value })} error={errors.email} />
-          {role === "parent" ? <Input label="Student email address" type="email" value={values.studentEmail} onChange={(e) => setValues({ ...values, studentEmail: e.target.value })} error={errors.studentEmail} placeholder="student@example.com" /> : null}
+          <Input label="Full name" required value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} error={errors.name} />
+          <Input label="Email" type="email" required value={values.email} onChange={(e) => setValues({ ...values, email: e.target.value })} error={errors.email} />
+          {role === "parent" ? <Input label="Student email address" type="email" required value={values.studentEmail} onChange={(e) => setValues({ ...values, studentEmail: e.target.value })} error={errors.studentEmail} placeholder="student@example.com" /> : null}
           <div className="grid gap-4 sm:grid-cols-2">
-            <Input label="Password" type="password" value={values.password} onChange={(e) => setValues({ ...values, password: e.target.value })} error={errors.password} />
-            <Input label="Confirm password" type="password" value={values.confirm} onChange={(e) => setValues({ ...values, confirm: e.target.value })} error={errors.confirm} />
+            <Input label="Password" type="password" required value={values.password} onChange={(e) => setValues({ ...values, password: e.target.value })} error={errors.password} />
+            <Input label="Confirm password" type="password" required value={values.confirm} onChange={(e) => setValues({ ...values, confirm: e.target.value })} error={errors.confirm} />
           </div>
           <div>
             <span className="mb-2 block text-sm font-semibold text-text">Role</span>
@@ -403,14 +401,9 @@ function Signup() {
               ))}
             </div>
           </div>
-          <label className="flex gap-3 text-sm text-muted">
-            <input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} className="mt-1 h-4 w-4" />
-            I agree to the terms and privacy policy.
-          </label>
-          {errors.terms ? <div className="text-xs font-medium text-danger">{errors.terms}</div> : null}
           {errors.credentials ? <p className="text-sm font-medium text-danger" role="alert">{errors.credentials}</p> : null}
           <Button className="w-full" type="submit" loading={submitting} disabled={!isConfigured}>Create Account</Button>
-          <div className="grid gap-3 sm:grid-cols-2"><Button type="button" variant="outline" disabled={!isConfigured || submitting} onClick={() => handleSocial("google")}>Google</Button><Button type="button" variant="outline" disabled={!isConfigured || submitting} onClick={() => handleSocial("microsoft")}>Microsoft</Button></div>
+          <Button className="w-full" type="button" variant="outline" disabled={!isConfigured || submitting} onClick={handleGoogleSignUp}>Google</Button>
           <p className="text-center text-sm text-muted">Already have an account? <a className="font-bold text-primary" href="/login">Log in</a></p>
         </form>
       </main>
@@ -763,7 +756,7 @@ function ReadingPage() {
     setRecordingError("");
     setSubmitting(true);
     try {
-      const completed = completeUserLesson(user?.uid, lesson, Math.max(secondsRef.current, 1), metrics, "lesson");
+      const completed = await completeUserLesson(user?.uid, lesson, Math.max(secondsRef.current, 1), metrics, "lesson");
       if (!completed) {
         setRecordingError("We could not save your assessment to your account. Check your connection and try again.");
         return;
@@ -824,40 +817,50 @@ function ReadingPage() {
 function AssessmentPage() {
   const { profile, user } = useAuth();
   const { available, syncing } = useUserLessonProgress(user?.uid);
+  const { attempts, available: attemptsAvailable } = useUserAssessmentAttempts(user?.uid);
   const { assessmentId } = useParams();
   const name = profile?.name || user?.displayName || user?.email?.split("@")[0] || "Reader";
-  const completedLessons = userProgressStats(user?.uid);
-  const assessmentHistory = userAssessmentHistory(user?.uid);
   const matchingProgress = loadMatchingAssessment(user?.uid, assessmentId);
-  const assessment = matchingProgress?.assessment ?? completedLessons.latest?.assessment;
-  const previousAssessment = assessmentHistory.find((item) => item.id !== assessment?.id);
+  const assessment = matchingProgress?.assessment;
+  const previousAssessment = matchingProgress
+    ? attempts.filter((attempt) => attempt.lessonId === matchingProgress.lessonId && attempt.assessment.id !== assessment?.id)
+      .sort((left, right) => right.attemptedAt.localeCompare(left.attemptedAt))[0]?.assessment
+    : undefined;
   if (!assessment) {
-    return <EmptyState title="No assessment yet" body="Complete a reading lesson to see your personalized result here." />;
+    return <EmptyState title="No result for this lesson yet" body="Complete this reading lesson to see its assessment results here." />;
   }
   return (
     <div className="space-y-6">
       <PageTitle title={assessment.kind === "initial" ? `${name}'s starting reading profile` : `Great job, ${name}!`} subtitle={assessment.kind === "initial" ? "This baseline will personalize your next lessons." : "Your reading result is ready."} />
       {syncing ? <p className="rounded-xl bg-[#FFF4DE] p-3 text-sm font-medium text-[#805500]" role="status" aria-live="polite">Your results are ready. Saving your assessment to your account...</p> : null}
       {!available ? <p className="rounded-xl bg-[#FFF4DE] p-3 text-sm font-medium text-[#805500]" role="status">Your result is shown, but we could not sync it to your account. Check your connection and try again.</p> : null}
-      {assessment.source === "browser" ? <Card className="border-warning/30 bg-[#FFF9EC] text-sm leading-6 text-muted">This result uses browser speech recognition. Its transcript can miss words, so check it below against your recording. The score compares recognized words with the passage; it does not measure pronunciation.</Card> : null}
+      {!attemptsAvailable ? <p className="rounded-xl bg-[#FFF4DE] p-3 text-sm font-medium text-[#805500]" role="status">Previous reading attempts could not be loaded. This result is still available.</p> : null}
       <div className="grid gap-4 sm:grid-cols-2">
         <StatCard label="Word match accuracy" value={`${assessment.accuracy}%`} icon={Target} />
         <StatCard label="Words correct per minute" value={assessment.wcpm} icon={Timer} tone="green" />
       </div>
-      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
-        <Card>
-          <SectionTitle title="Previous Result vs Today's Result" />
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={[...(previousAssessment ? [{ name: "Previous", accuracy: previousAssessment.accuracy, wcpm: previousAssessment.wcpm }] : []), { name: "Today", accuracy: assessment.accuracy, wcpm: assessment.wcpm }]}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#E4E7F0" /><XAxis dataKey="name" /><YAxis /><Tooltip /><Bar dataKey="accuracy" fill="#4169F5" radius={8} /><Bar dataKey="wcpm" fill="#32A66A" radius={8} />
-            </BarChart>
-          </ResponsiveContainer>
-        </Card>
-        <Card className="space-y-3">
+      <Card>
+        <SectionTitle title="This lesson's reading results" />
+        <ResponsiveContainer width="100%" height={280}>
+          <ComposedChart data={[
+            ...(previousAssessment ? [{ name: "Previous", accuracy: previousAssessment.accuracy, wcpm: previousAssessment.wcpm }] : []),
+            { name: "Current", accuracy: assessment.accuracy, wcpm: assessment.wcpm },
+          ]}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E4E7F0" />
+            <XAxis dataKey="name" />
+            <YAxis yAxisId="accuracy" domain={[0, 100]} />
+            <YAxis yAxisId="wcpm" orientation="right" />
+            <Tooltip />
+            <Legend />
+            <Bar yAxisId="accuracy" dataKey="accuracy" name="Accuracy (%)" fill="#4169F5" radius={8} />
+            <Bar yAxisId="wcpm" dataKey="wcpm" name="WCPM" fill="#32A66A" radius={8} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </Card>
+      <Card className="space-y-3">
           <h2 className="text-xl font-bold">Assessment Summary</h2>
           {["Lesson", assessment.lesson, "Reading level", assessment.readingLevel, "Date", assessment.date, "Reading duration", assessment.duration, "Words read", String(assessment.wordsRead), "Analysis", assessment.source === "whisper" ? "Whisper AI" : assessment.source === "browser" ? "Browser speech recognition" : "Audio only"].map((item, index) => index % 2 === 0 ? <div key={`${item}-${index}`} className="pt-2 text-xs font-bold uppercase text-muted">{item}</div> : <div key={`${item}-${index}`} className="text-base font-semibold text-text">{item}</div>)}
-        </Card>
-      </div>
+      </Card>
       <div className="grid gap-5 md:grid-cols-2">
         <Feedback title="What You Did Well" tone="green" items={[`${assessment.accuracy}% of reference words matched.`, `${assessment.wcpm} words correct per minute.`, assessment.errors.length ? `${assessment.errors.length} reading issue${assessment.errors.length === 1 ? "" : "s"} identified for practice.` : "No reading errors were identified."]} />
         <Feedback title="Personalized Practice" tone="orange" items={assessment.recommendations} />
@@ -868,6 +871,64 @@ function AssessmentPage() {
         {assessment.transcript ? <p className="mt-4 rounded-xl bg-[#F8F9FD] p-4 text-sm leading-6 text-muted"><span className="font-bold text-text">Transcript:</span> {assessment.transcript}</p> : null}
       </Card>
       <div className="flex flex-wrap gap-3"><LinkButton to="/student/lessons">Continue Learning</LinkButton></div>
+    </div>
+  );
+}
+
+function OverallReadingResultsPage() {
+  const { user } = useAuth();
+  const { available } = useUserLessonProgress(user?.uid);
+  const stats = userProgressStats(user?.uid);
+  const difficultyOrder = { Easy: 0, Medium: 1, Challenging: 2 };
+  const lessonNumbers = [...lessons]
+    .sort((left, right) => difficultyOrder[left.difficulty] - difficultyOrder[right.difficulty] || lessons.indexOf(left) - lessons.indexOf(right))
+    .reduce((numbers, lesson, index) => numbers.set(lesson.id, index + 1), new Map<string, number>());
+  const results = loadUserLessonProgress(user?.uid).items
+    .filter((item) => item.assessment)
+    .map((item) => {
+      const assessment = item.assessment!;
+      const lesson = lessons.find((entry) => entry.id === item.lessonId);
+      return {
+        assessment,
+        lessonNumber: lessonNumbers.get(item.lessonId) ?? Number.MAX_SAFE_INTEGER,
+        lessonTitle: lesson?.title ?? assessment.lesson,
+        difficulty: lesson?.difficulty ?? "Unknown",
+      };
+    })
+    .sort((left, right) => left.lessonNumber - right.lessonNumber || left.lessonTitle.localeCompare(right.lessonTitle));
+
+  return (
+    <div className="space-y-6">
+      <PageTitle title="Reading Results" subtitle="See your overall reading performance across lessons." />
+      {!available ? <p className="rounded-xl bg-[#FFF4DE] p-3 text-sm font-medium text-[#805500]" role="status">Some assessment data could not be loaded. Check your connection and Firestore permissions.</p> : null}
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatCard label="Lessons Assessed" value={results.length} icon={BookOpen} />
+        <StatCard label="Average Accuracy" value={results.length ? `${stats.averageAccuracy}%` : "-"} icon={Target} tone="green" />
+        <StatCard label="Average WCPM" value={results.length ? stats.averageWcpm : "-"} icon={Timer} tone="purple" />
+      </div>
+      {results.length > 1 ? (
+        <>
+        <p className="text-sm text-muted">Lesson numbers follow difficulty order: Easy, Medium, then Challenging. Hover over a graph point or bar to see the lesson title.</p>
+        <div className="grid gap-6 xl:grid-cols-2">
+          <Card>
+            <SectionTitle title="Accuracy across lessons" />
+            <ResponsiveContainer width="100%" height={280}>
+              <ReLineChart data={results.map((result) => ({ name: `Lesson ${result.lessonNumber}`, title: result.lessonTitle, difficulty: result.difficulty, accuracy: result.assessment.accuracy }))}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E4E7F0" /><XAxis dataKey="name" /><YAxis domain={[0, 100]} /><Tooltip labelFormatter={(_label, payload) => payload[0]?.payload ? `${payload[0].payload.title} (${payload[0].payload.difficulty})` : ""} /><Line dataKey="accuracy" name="Accuracy (%)" stroke="#4169F5" strokeWidth={3} dot={{ r: 4 }} />
+              </ReLineChart>
+            </ResponsiveContainer>
+          </Card>
+          <Card>
+            <SectionTitle title="WCPM across lessons" />
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={results.map((result) => ({ name: `Lesson ${result.lessonNumber}`, title: result.lessonTitle, difficulty: result.difficulty, wcpm: result.assessment.wcpm }))}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E4E7F0" /><XAxis dataKey="name" /><YAxis /><Tooltip labelFormatter={(_label, payload) => payload[0]?.payload ? `${payload[0].payload.title} (${payload[0].payload.difficulty})` : ""} /><Bar dataKey="wcpm" name="WCPM" fill="#32A66A" radius={8} />
+              </BarChart>
+            </ResponsiveContainer>
+          </Card>
+        </div>
+        </>
+      ) : <EmptyState title={results.length ? "Read another lesson to see your graphs" : "No reading results yet"} body={results.length ? "Overall graphs appear after you have assessment results for at least two lessons." : "Complete a reading lesson and its assessment will appear here."} />}
     </div>
   );
 }
@@ -895,25 +956,46 @@ function ProgressPage() {
   );
 }
 
-function TeacherDashboard() {
-  const { profile, user } = useAuth();
-  const name = profile?.name || user?.displayName || user?.email?.split("@")[0] || "Teacher";
-  const { accounts: studentAccounts, available: directoryAvailable, loading: directoryLoading } = useStudentAccounts();
-  const { stats: studentStats, available: progressAvailable } = useUserProgressStatsForUsers(studentAccounts.map((account) => account.uid));
-  const signedInStudents = studentAccounts.map((account, index) => studentRecord(account.uid, account.name, account.email, studentStats[index]));
-  const activeStudents = signedInStudents.filter((student) => student.lessonsCompleted > 0).length;
-  const averageAccuracy = signedInStudents.length ? Math.round(signedInStudents.reduce((total, student) => total + student.accuracy, 0) / signedInStudents.length) : 0;
-  const averageWcpm = signedInStudents.length ? Math.round(signedInStudents.reduce((total, student) => total + student.wcpm, 0) / signedInStudents.length) : 0;
+function useTeacherStudents() {
+  const { accounts, available: directoryAvailable, loading: directoryLoading } = useStudentAccounts();
+  const { stats, available: progressAvailable } = useUserProgressStatsForUsers(accounts.map((account) => account.uid));
+  const students = accounts.map((account, index) => studentRecord(account.uid, account.name, account.email, stats[index]));
+  return {
+    students,
+    directoryAvailable,
+    directoryLoading,
+    progressAvailable,
+    activeStudents: students.filter((student) => student.lessonsCompleted > 0).length,
+  };
+}
+
+function TeacherStudentsPage() {
+  const { students, directoryAvailable, directoryLoading, progressAvailable } = useTeacherStudents();
   return (
     <div className="space-y-6">
-      <PageTitle title={`Good morning, ${name}`} subtitle="Keep track of reading progress across your class." />
+      <PageTitle title="Students" subtitle="View student reading performance and lesson progress." />
       {!directoryAvailable ? <p className="rounded-xl bg-[#FFF4DE] p-3 text-sm font-medium text-[#805500]" role="status">Student accounts could not be loaded. Check your connection and Firestore permissions.</p> : null}
       {!progressAvailable ? <p className="rounded-xl bg-[#FFF4DE] p-3 text-sm font-medium text-[#805500]" role="status">Student accounts loaded, but some learning data could not be read. Check the published Firestore rules.</p> : null}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Students" value={signedInStudents.length} icon={Users} /><StatCard label="Active Readers" value={activeStudents} icon={Activity} tone="green" /><StatCard label="Avg Accuracy" value={signedInStudents.length ? `${averageAccuracy}%` : "-"} icon={Target} /><StatCard label="Avg WCPM" value={signedInStudents.length ? averageWcpm : "-"} icon={Timer} tone="purple" /></div>
-      <div className="grid gap-6 xl:grid-cols-[1fr_390px]">
-        <Card className="xl:col-span-2"><SectionTitle title="Class progress" /><p className="text-sm text-muted">Progress is calculated from each student's completed lessons.</p><div className="mt-5 grid gap-3 sm:grid-cols-3"><Metric label="Students registered" value={String(signedInStudents.length)} /><Metric label="Lessons completed" value={String(signedInStudents.reduce((total, student) => total + student.lessonsCompleted, 0))} /><Metric label="Class progress" value={`${signedInStudents.length ? Math.round(signedInStudents.reduce((total, student) => total + student.progress, 0) / signedInStudents.length) : 0}%`} /></div></Card>
+      <Card><SectionTitle title="Student Directory" />{directoryLoading ? <p className="py-4 text-sm text-muted">Loading student accounts...</p> : students.length ? <Table headers={["Student", "Email", "Accuracy", "WCPM", "Progress", "Status", "Action"]} rows={students.map((student) => [<div className="flex items-center gap-3"><Avatar name={student.name} /><span className="font-bold">{student.name}</span></div>, student.email, `${student.accuracy}%`, student.wcpm || "-", <ProgressBar value={student.progress} />, <Badge tone={student.status === "On Track" ? "green" : student.status === "Needs Practice" ? "orange" : "gray"}>{student.status}</Badge>, <LinkButton to={`/teacher/students/${student.id}`} variant="outline">View</LinkButton>])} /> : <EmptyState title="No students registered" body="Student accounts will appear here after they sign up." />}</Card>
+    </div>
+  );
+}
+
+function TeacherClassOverview() {
+  const { students, activeStudents, directoryAvailable, directoryLoading, progressAvailable } = useTeacherStudents();
+  const totalLessonsCompleted = students.reduce((total, student) => total + student.lessonsCompleted, 0);
+  const averageProgress = students.length ? Math.round(students.reduce((total, student) => total + student.progress, 0) / students.length) : 0;
+  return (
+    <div className="space-y-6">
+      <PageTitle title="Class Overview" subtitle="Review class-wide reading outcomes and student progress." />
+      {!directoryAvailable ? <p className="rounded-xl bg-[#FFF4DE] p-3 text-sm font-medium text-[#805500]" role="status">Student accounts could not be loaded. Check your connection and Firestore permissions.</p> : null}
+      {!progressAvailable ? <p className="rounded-xl bg-[#FFF4DE] p-3 text-sm font-medium text-[#805500]" role="status">Student accounts loaded, but some learning data could not be read. Check the published Firestore rules.</p> : null}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Students" value={students.length} icon={Users} /><StatCard label="Active Readers" value={activeStudents} icon={Activity} tone="green" /><StatCard label="Lessons Completed" value={totalLessonsCompleted} icon={BookOpen} tone="orange" /><StatCard label="Average Progress" value={`${averageProgress}%`} icon={TrendingUp} tone="purple" /></div>
+      <div className="grid gap-6 xl:grid-cols-2">
+        <TrendChart title="Accuracy by student" dataKey="accuracy" color="#4169F5" source={students.map((student) => ({ name: student.name, accuracy: student.accuracy }))} />
+        <TrendChart title="WCPM by student" dataKey="wcpm" color="#6C4CE8" type="bar" source={students.map((student) => ({ name: student.name, wcpm: student.wcpm }))} />
       </div>
-      <Card><SectionTitle title="Students" />{directoryLoading ? <p className="py-4 text-sm text-muted">Loading student accounts...</p> : signedInStudents.length ? <Table headers={["Student", "Email", "Accuracy", "WCPM", "Progress", "Status", "Action"]} rows={signedInStudents.map((s) => [<div className="flex items-center gap-3"><Avatar name={s.name} /><span className="font-bold">{s.name}</span></div>, s.email, `${s.accuracy}%`, s.wcpm || "-", <ProgressBar value={s.progress} />, <Badge tone={s.status === "On Track" ? "green" : s.status === "Needs Practice" ? "orange" : "gray"}>{s.status}</Badge>, <LinkButton to={`/teacher/students/${s.id}`} variant="outline">View</LinkButton>])} /> : <EmptyState title="No students registered" body="Student accounts will appear here after they sign up." />}</Card>
+      <Card><SectionTitle title="Class progress" /><p className="text-sm text-muted">Progress reflects each student's completed lessons.</p>{directoryLoading ? <p className="py-4 text-sm text-muted">Loading student accounts...</p> : students.length ? <div className="mt-4 space-y-4">{students.map((student) => <div key={student.id} className="grid gap-2 sm:grid-cols-[minmax(140px,1fr)_2fr_auto] sm:items-center"><span className="font-semibold text-text">{student.name}</span><ProgressBar value={student.progress} /><span className="text-sm font-semibold text-muted">{student.progress}% · {student.lessonsCompleted} lessons</span></div>)}</div> : <EmptyState title="No class data yet" body="Student progress will appear here after students register and start lessons." />}</Card>
     </div>
   );
 }
@@ -924,7 +1006,11 @@ function StudentPerformance() {
   const account = accounts.find((item) => item.uid === studentId);
   const { stats, available: progressAvailable } = useUserProgressStatsForUsers(account ? [account.uid] : []);
   const student = account ? studentRecord(account.uid, account.name, account.email, stats[0]) : null;
-  const studentAssessments = student ? userAssessmentHistory(student.id) : [];
+  const studentLessonProgress = student
+    ? loadUserLessonProgress(student.id).items
+      .filter((item) => item.status !== "Not Started" || item.startedAt)
+      .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))
+    : [];
   if (loading) return <LoadingScreen />;
   if (!available) return <EmptyState title="Student data unavailable" body="We could not load student accounts. Check your connection and Firestore permissions." />;
   if (!student) return <EmptyState title="Student not found" body="This student account is no longer available." />;
@@ -933,7 +1019,7 @@ function StudentPerformance() {
       <Card className="flex flex-wrap items-center gap-5"><Avatar name={student.name} size="lg" /><div><h1 className="text-3xl font-extrabold">{student.name}</h1><p className="text-muted">{student.grade} - {student.className} - {student.level}</p></div><Badge tone="green">{student.status}</Badge></Card>
       {!progressAvailable ? <p className="rounded-xl bg-[#FFF4DE] p-3 text-sm font-medium text-[#805500]" role="status">Student learning data could not be read. Check the published Firestore rules.</p> : null}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Accuracy" value={`${student.accuracy}%`} icon={Target} /><StatCard label="WCPM" value={student.wcpm} icon={Timer} tone="purple" /><StatCard label="Fluency" value={`${student.fluency}%`} icon={Activity} tone="green" /><StatCard label="Lessons" value={student.lessonsCompleted} icon={BookOpen} tone="orange" /></div>
-      <Card><SectionTitle title="Assessment History" />{studentAssessments.length ? <Table headers={["Lesson", "Date", "Accuracy", "WCPM"]} rows={studentAssessments.map((assessment) => [assessment.lesson, assessment.date, `${assessment.accuracy}%`, assessment.wcpm])} /> : <EmptyState title="No completed lessons" body="Assessment results will appear after this student completes a lesson." />}</Card>
+      <Card><SectionTitle title="Lesson Progress" />{studentLessonProgress.length ? <Table headers={["Lesson", "Status", "Progress", "Accuracy", "WCPM", "Started"]} rows={studentLessonProgress.map((item) => [item.assessment?.lesson ?? lessons.find((lesson) => lesson.id === item.lessonId)?.title ?? item.lessonId, <Badge tone={item.status === "Completed" ? "green" : "orange"}>{item.status}</Badge>, <ProgressBar value={item.progress} />, item.assessment ? `${item.assessment.accuracy}%` : "-", item.assessment?.wcpm ?? "-", item.startedAt ? new Date(item.startedAt).toLocaleDateString() : "-"])} /> : <EmptyState title="No lessons started" body="The student's lesson progress will appear here after they start a lesson." />}</Card>
     </div>
   );
 }
@@ -976,7 +1062,7 @@ function ParentDashboard() {
     <div className="space-y-6">
       <PageTitle title={`Welcome back, ${name}!`} subtitle="Your linked student's reading progress is easy to follow." />
       <Card className="grid gap-5 md:grid-cols-[auto_1fr_auto]"><Avatar name={linkedAccount.name} size="lg" /><div><h2 className="text-2xl font-extrabold">{linkedAccount.name}</h2><p className="text-muted">Reading learner</p><ProgressBar value={linkedStats.overallProgress} className="mt-4" /></div><div className="grid grid-cols-2 gap-3 text-center"><Metric label="Accuracy" value={linkedStats.averageAccuracy ? `${linkedStats.averageAccuracy}%` : "-"} /><Metric label="WCPM" value={linkedStats.averageWcpm ? String(linkedStats.averageWcpm) : "-"} /></div></Card>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Lessons Completed" value={`${linkedStats.completedCount}/${linkedStats.totalLessons}`} icon={BookOpen} /><StatCard label="Reading Time" value={latestAssessment?.duration ?? "-"} icon={Clock} tone="orange" /><StatCard label="Current Progress" value={`${linkedStats.overallProgress}%`} icon={Sparkles} tone="green" /><StatCard label="Recent Assessment" value={latestAssessment ? String(latestAssessment.overall) : "-"} icon={CheckCircle2} tone="purple" /></div>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Lessons Completed" value={`${linkedStats.completedCount}/${linkedStats.totalLessons}`} icon={BookOpen} /><StatCard label="Reading Time" value={latestAssessment?.duration ?? "-"} icon={Clock} tone="orange" /><StatCard label="Current Progress" value={`${linkedStats.overallProgress}%`} icon={Sparkles} tone="green" /><StatCard label="Recent Assessment" value={latestAssessment ? `${latestAssessment.overall}%` : "-"} icon={CheckCircle2} tone="purple" /></div>
       <StudentLessonHistory items={lessonProgress} available={progressAvailable} loading={progressLoading} />
       <div className="grid gap-6 xl:grid-cols-[1fr_360px]"><TrendChart title="Reading Progress" dataKey="accuracy" color="#4169F5" /><Card><SectionTitle title="How You Can Help" /><div className="space-y-3">{["Read together for 10 minutes each evening.", "Practice difficult words before a lesson.", "Build vocabulary by asking your student to explain new words.", "Encourage daily reading without rushing pace."].map((item) => <div key={item} className="rounded-xl bg-[#F8F9FD] p-4 text-sm font-medium text-muted">{item}</div>)}</div></Card></div>
     </div>
@@ -985,7 +1071,7 @@ function ParentDashboard() {
 
 function StudentLessonHistory({ items, available, loading }: { items: ReturnType<typeof loadUserLessonProgress>["items"]; available: boolean; loading: boolean }) {
   const assessments = items.filter((item) => item.assessment).sort((a, b) => (b.completedAt ?? "").localeCompare(a.completedAt ?? ""));
-  return <Card><SectionTitle title="Learning History" />{!available ? <p className="mb-4 rounded-xl bg-[#FFF4DE] p-3 text-sm font-medium text-[#805500]" role="status">Student learning data could not be loaded. Check your connection and Firestore permissions.</p> : null}{loading ? <p className="py-4 text-sm text-muted">Loading learning history...</p> : assessments.length ? <Table headers={["Lesson", "Status", "Accuracy", "WCPM", "Completed"]} rows={assessments.map(({ assessment, status, completedAt }) => [assessment!.lesson, status, `${assessment!.accuracy}%`, assessment!.wcpm, completedAt ? new Date(completedAt).toLocaleDateString() : "In progress"])} /> : <EmptyState title="No lesson data yet" body="Completed lessons and assessment results will appear here." />}</Card>;
+  return <Card id="learning-history"><SectionTitle title="Learning History" />{!available ? <p className="mb-4 rounded-xl bg-[#FFF4DE] p-3 text-sm font-medium text-[#805500]" role="status">Student learning data could not be loaded. Check your connection and Firestore permissions.</p> : null}{loading ? <p className="py-4 text-sm text-muted">Loading learning history...</p> : assessments.length ? <Table headers={["Lesson", "Status", "Accuracy", "WCPM", "Completed"]} rows={assessments.map(({ assessment, status, completedAt }) => [assessment!.lesson, status, `${assessment!.accuracy}%`, assessment!.wcpm, completedAt ? new Date(completedAt).toLocaleDateString() : "In progress"])} /> : <EmptyState title="No lesson data yet" body="Completed lessons and assessment results will appear here." />}</Card>;
 }
 
 function studentRecord(userId: string, name: string, email: string, stats = userProgressStats(userId)): Student & { email: string } {

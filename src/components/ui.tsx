@@ -1,8 +1,10 @@
-import { Bell, ChevronDown, LogOut, Menu, Search, Settings, X } from "lucide-react";
+import { ChevronDown, LogOut, Menu, Search, X } from "lucide-react";
 import { useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
-import { Link, NavLink, useLocation } from "react-router-dom";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { cn, initials } from "../utils";
 import type { Lesson, NavItem } from "../types";
+import { lessons } from "../data/mockData";
+import { useStudentAccounts } from "../auth";
 
 export function LogoArtwork({ className = "", alt = "ReadWise" }: { className?: string; alt?: string }) {
   return (
@@ -69,8 +71,8 @@ export function LinkButton({ className, variant = "primary", to, children }: { c
   );
 }
 
-export function Card({ className, children }: { className?: string; children: ReactNode }) {
-  return <section className={cn("rounded-2xl border border-border bg-white p-5 shadow-soft", className)}>{children}</section>;
+export function Card({ className, children, id }: { className?: string; children: ReactNode; id?: string }) {
+  return <section id={id} className={cn("rounded-2xl border border-border bg-white p-5 shadow-soft", className)}>{children}</section>;
 }
 
 export function Input({ label, error, className, ...props }: InputHTMLAttributes<HTMLInputElement> & { label?: string; error?: string }) {
@@ -114,6 +116,86 @@ export function SearchBar({ value, onChange, placeholder = "Search" }: { value: 
       />
     </label>
   );
+}
+
+type DashboardSearchItem = { title: string; detail: string; to: string };
+
+function SearchMenu({ items, placeholder }: { items: DashboardSearchItem[]; placeholder: string }) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
+  const matches = query.trim()
+    ? items.filter((item) => `${item.title} ${item.detail}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).slice(0, 6)
+    : [];
+
+  return (
+    <div className="relative" onBlur={(event) => {
+      if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+    }}>
+      <label className="relative block">
+        <span className="sr-only">{placeholder}</span>
+        <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+        <input
+          value={query}
+          onChange={(event) => { setQuery(event.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setOpen(false);
+            if (event.key === "Enter" && matches[0]) {
+              navigate(matches[0].to);
+              setQuery("");
+              setOpen(false);
+            }
+          }}
+          placeholder={placeholder}
+          className="h-12 w-full rounded-xl border border-border bg-white pl-11 pr-4 text-sm text-text placeholder:text-quiet"
+          aria-expanded={open && Boolean(query.trim())}
+          aria-controls="dashboard-search-results"
+          aria-autocomplete="list"
+        />
+      </label>
+      {open && query.trim() ? (
+        <div id="dashboard-search-results" role="listbox" className="absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-xl border border-border bg-white shadow-soft">
+          {matches.length ? matches.map((item) => (
+            <button
+              key={`${item.title}-${item.to}`}
+              type="button"
+              role="option"
+              aria-selected="false"
+              onClick={() => { navigate(item.to); setQuery(""); setOpen(false); }}
+              className="block w-full border-b border-border px-4 py-3 text-left last:border-0 hover:bg-[#F7F9FF]"
+            >
+              <span className="block text-sm font-semibold text-text">{item.title}</span>
+              <span className="mt-0.5 block text-xs text-muted">{item.detail}</span>
+            </button>
+          )) : <p className="px-4 py-3 text-sm text-muted">No matches found.</p>}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function StudentDashboardSearch({ role }: { role: string }) {
+  const items = lessons.map((lesson) => ({
+    title: lesson.title,
+    detail: `${lesson.category} · ${lesson.level}`,
+    to: role === "Parent" ? "/parent/dashboard#learning-history" : `/student/reading/${lesson.id}`,
+  }));
+  return <SearchMenu items={items} placeholder="Search lessons" />;
+}
+
+function TeacherDashboardSearch() {
+  const { accounts } = useStudentAccounts();
+  const items = accounts.map((account) => ({
+    title: account.name,
+    detail: account.email,
+    to: `/teacher/students/${account.uid}`,
+  }));
+  return <SearchMenu items={items} placeholder="Search students" />;
+}
+
+function DashboardSearch({ role }: { role: string }) {
+  return role === "Teacher" ? <TeacherDashboardSearch /> : <StudentDashboardSearch role={role} />;
 }
 
 export function Badge({ children, tone = "blue" }: { children: ReactNode; tone?: "blue" | "green" | "orange" | "purple" | "red" | "gray" }) {
@@ -344,12 +426,9 @@ export function AppLayout({ nav, children, user, subtitle, onSignOut }: { nav: N
               <Menu className="h-5 w-5" />
             </button>
             <div className="hidden flex-1 md:block">
-              <SearchBar value="" onChange={() => undefined} placeholder="Search lessons and students" />
+              <DashboardSearch role={user.role} />
             </div>
             <div className="ml-auto flex items-center gap-3">
-              <button className="grid h-11 w-11 place-items-center rounded-xl border border-border bg-white" aria-label="Notifications">
-                <Bell className="h-5 w-5 text-muted" />
-              </button>
               <Avatar name={user.name} />
               <div className="hidden sm:block">
                 <div className="text-sm font-bold text-text">{user.name}</div>
@@ -387,10 +466,6 @@ function SidebarContent({ nav, user, onNavigate }: { nav: NavItem[]; user: { nam
         ))}
       </nav>
       <div className="mt-auto space-y-3">
-        <NavLink to="/student/dashboard" className="flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold text-muted hover:bg-[#EEF3FF] hover:text-primary">
-          <Settings className="h-5 w-5" />
-            Settings
-        </NavLink>
         <div className="flex items-center gap-3 rounded-2xl border border-border p-3">
           <Avatar name={user.name} />
           <div>

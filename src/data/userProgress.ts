@@ -16,6 +16,13 @@ export type UserLessonProgress = {
   audioStored?: boolean;
 };
 
+export type UserAssessmentAttempt = {
+  id: string;
+  lessonId: string;
+  assessment: Assessment;
+  attemptedAt: string;
+};
+
 type ProgressState = { items: UserLessonProgress[]; available: boolean; loading: boolean; syncing: boolean };
 const emptyState: ProgressState = { items: [], available: true, loading: false, syncing: false };
 const cache = new Map<string, ProgressState>();
@@ -54,6 +61,32 @@ export function useUserLessonProgress(userId?: string | null) {
       userSubscribers.delete(setState);
       if (!userSubscribers.size) subscribers.delete(userId);
     };
+  }, [userId]);
+  return state;
+}
+
+export function useUserAssessmentAttempts(userId?: string | null) {
+  const [state, setState] = useState<{ attempts: UserAssessmentAttempt[]; available: boolean; loading: boolean }>({
+    attempts: [],
+    available: true,
+    loading: Boolean(userId),
+  });
+  useEffect(() => {
+    if (!userId) {
+      setState({ attempts: [], available: true, loading: false });
+      return;
+    }
+    setState((currentState) => ({ ...currentState, loading: true }));
+    return onSnapshot(collection(db, "users", userId, "assessmentAttempts"), (snapshot) => {
+      const attempts = snapshot.docs.map((entry) => {
+        const data = entry.data() as Omit<UserAssessmentAttempt, "id">;
+        return { ...data, id: entry.id, assessment: normalize({ lessonId: data.lessonId, assessment: data.assessment } as UserLessonProgress).assessment! };
+      }).sort((left, right) => left.attemptedAt.localeCompare(right.attemptedAt));
+      setState({ attempts, available: true, loading: false });
+    }, (error) => {
+      console.error("Could not load reading assessment attempts.", error);
+      setState((currentState) => ({ ...currentState, available: false, loading: false }));
+    });
   }, [userId]);
   return state;
 }
@@ -111,18 +144,47 @@ export async function startUserLesson(userId: string | null | undefined, lessonI
   return saved ? progress : null;
 }
 
-export function completeUserLesson(userId: string | null | undefined, lesson: Lesson, secondsRead: number, metrics?: ReadingMetrics, kind: Assessment["kind"] = "lesson") {
+export async function completeUserLesson(userId: string | null | undefined, lesson: Lesson, secondsRead: number, metrics?: ReadingMetrics, kind: Assessment["kind"] = "lesson") {
   if (!userId) return null;
   const measured = metrics ?? analyzeLesson(lesson, "", secondsRead, "manual");
   const skippedWords = measured.errors.filter((error) => error.type === "skipped").length;
   const progressPercent = measured.expectedWords ? Math.round(((measured.expectedWords - skippedWords) / measured.expectedWords) * 100) : 0;
   const completed = progressPercent === 100;
-  const assessment: Assessment = { id: `a-${lesson.id}`, lessonId: lesson.id, lesson: lesson.title, date: new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }), duration: `${Math.floor(secondsRead / 60)}m ${secondsRead % 60}s`, wordsRead: measured.spokenWords, overall: measured.accuracy, accuracy: measured.accuracy, wcpm: measured.wcpm, pronunciation: measured.pronunciation, fluency: measured.fluency, readingLevel: measured.readingLevel, transcript: measured.transcript, errors: measured.errors, recommendations: measured.recommendations, source: measured.source, kind };
-  const startedAt = loadUserLessonProgress(userId).items.find((item) => item.lessonId === lesson.id)?.startedAt ?? new Date().toISOString();
-  const progress: UserLessonProgress = { lessonId: lesson.id, progress: progressPercent, status: completed ? "Completed" : "In Progress", startedAt, ...(completed ? { completedAt: new Date().toISOString() } : {}), secondsRead, assessment, audioStored: false };
+  const attemptedAt = new Date().toISOString();
+  const existing = loadUserLessonProgress(userId).items.find((item) => item.lessonId === lesson.id);
+  const attemptCollection = collection(db, "users", userId, "assessmentAttempts");
+  const attemptRef = doc(attemptCollection);
+  const assessment: Assessment = { id: `a-${attemptRef.id}`, lessonId: lesson.id, lesson: lesson.title, date: new Date(attemptedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }), duration: `${Math.floor(secondsRead / 60)}m ${secondsRead % 60}s`, wordsRead: measured.spokenWords, overall: measured.accuracy, accuracy: measured.accuracy, wcpm: measured.wcpm, pronunciation: measured.pronunciation, fluency: measured.fluency, readingLevel: measured.readingLevel, transcript: measured.transcript, errors: measured.errors, recommendations: measured.recommendations, source: measured.source, kind };
+  const startedAt = existing?.startedAt ?? attemptedAt;
+  const progress: UserLessonProgress = { lessonId: lesson.id, progress: progressPercent, status: completed ? "Completed" : "In Progress", startedAt, ...(completed ? { completedAt: attemptedAt } : {}), secondsRead, assessment, audioStored: false };
   replaceCachedProgress(userId, progress);
-  void saveUserLessonProgress(userId, progress);
-  return progress;
+  updateCache(userId, { ...current(userId), syncing: true });
+  const writes = [
+    setDoc(attemptRef, { lessonId: lesson.id, assessment, attemptedAt } satisfies Omit<UserAssessmentAttempt, "id">),
+    setDoc(doc(db, "users", userId, "lessonProgress", lesson.id), progress),
+  ];
+  if (existing?.assessment?.id === `a-${lesson.id}`) {
+    const legacyAttempt: UserAssessmentAttempt = {
+      id: `legacy-${lesson.id}`,
+      lessonId: lesson.id,
+      assessment: existing.assessment,
+      attemptedAt: existing.completedAt ?? existing.startedAt ?? attemptedAt,
+    };
+    writes.push(setDoc(doc(db, "users", userId, "assessmentAttempts", legacyAttempt.id), {
+      lessonId: legacyAttempt.lessonId,
+      assessment: legacyAttempt.assessment,
+      attemptedAt: legacyAttempt.attemptedAt,
+    }));
+  }
+  try {
+    await Promise.all(writes);
+    updateCache(userId, { ...current(userId), syncing: false });
+    return progress;
+  } catch (error) {
+    console.error("Could not save the student's lesson assessment and attempt history.", error);
+    updateCache(userId, { ...current(userId), available: false, syncing: false });
+    return null;
+  }
 }
 
 export function lessonsForUser(userId?: string | null) {
@@ -134,10 +196,12 @@ export function userProgressStats(userId?: string | null) {
   const progress = loadUserLessonProgress(userId).items;
   const completed = progress.filter((item) => item.status === "Completed");
   const inProgress = progress.filter((item) => item.status === "In Progress");
-  const latest = [...completed].sort((a, b) => (b.completedAt ?? "").localeCompare(a.completedAt ?? ""))[0];
-  const averageAccuracy = completed.length ? Math.round(completed.reduce((total, item) => total + (item.assessment?.accuracy ?? 0), 0) / completed.length) : 0;
-  const averageWcpm = completed.length ? Math.round(completed.reduce((total, item) => total + (item.assessment?.wcpm ?? 0), 0) / completed.length) : 0;
-  return { completedCount: completed.length, inProgressCount: inProgress.length, totalLessons: lessons.length, latest, averageAccuracy, averageWcpm, overallProgress: lessons.length ? Math.round((completed.length / lessons.length) * 100) : 0 };
+  const assessed = progress.filter((item) => item.assessment);
+  const latest = [...assessed].sort((a, b) => (b.completedAt ?? b.startedAt ?? "").localeCompare(a.completedAt ?? a.startedAt ?? ""))[0];
+  const averageAccuracy = assessed.length ? Math.round(assessed.reduce((total, item) => total + item.assessment!.accuracy, 0) / assessed.length) : 0;
+  const averageWcpm = assessed.length ? Math.round(assessed.reduce((total, item) => total + item.assessment!.wcpm, 0) / assessed.length) : 0;
+  const overallProgress = lessons.length ? Math.round(progress.reduce((total, item) => total + item.progress, 0) / lessons.length) : 0;
+  return { completedCount: completed.length, inProgressCount: inProgress.length, totalLessons: lessons.length, latest, averageAccuracy, averageWcpm, overallProgress };
 }
 
 export function userAssessmentHistory(userId?: string | null) {
